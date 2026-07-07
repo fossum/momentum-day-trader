@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "Trade": {
+      "title": "Trade",
+      "description": "Represents a day trade log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "ticker": { "type": "string" },
+        "entryPrice": { "type": "number" },
+        "exitPrice": { "type": "number" },
+        "shares": { "type": "number" },
+        "strategy": { "type": "string" },
+        "notes": { "type": "string" },
+        "pnl": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "ticker", "entryPrice", "exitPrice", "shares", "strategy", "pnl"]
+    },
+    "Preferences": {
+      "title": "Preferences",
+      "description": "Represents user preferences for the stock markets and platform settings",
+      "type": "object",
+      "properties": {
+        "markets": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "robinhoodOnly": { "type": "boolean" }
+      },
+      "required": ["markets", "robinhoodOnly"]
+    }
+  },
+  "firestore": {
+    "users/{userId}/trades/{tradeId}": {
+      "schema": "Trade",
+      "description": "Collection of trades logged by a user"
+    },
+    "users/{userId}/preferences/{prefId}": {
+      "schema": "Preferences",
+      "description": "Collection of user preferences/settings"
+    }
+  }
+}

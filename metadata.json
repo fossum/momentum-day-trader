@@ -1,0 +1,6 @@
+{
+  "name": "Momentum Tracker",
+  "description": "A Ross Cameron strategy momentum day trading log and FMP integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
