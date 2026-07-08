@@ -3,11 +3,29 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 
 // Disable TLS verification for IBKR Client Portal Gateway self-signed certs
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+// Local logging helper for user decisions
+function logUserDecision(userId: string | undefined, message: string, level: string = "INFO") {
+  if (!userId) return;
+  try {
+    const logsDir = path.join(process.cwd(), "logs");
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    const logFilePath = path.join(logsDir, `${userId}.log`);
+    const timestamp = new Date().toISOString();
+    const formattedMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`;
+    fs.appendFileSync(logFilePath, formattedMessage);
+  } catch (error) {
+    console.error(`Failed to write local log for user ${userId}:`, error);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -247,6 +265,16 @@ async function startServer() {
     }
   });
 
+  // Local logging endpoint for client decisions
+  app.post("/api/logs", (req, res) => {
+    const { userId, message, level } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    logUserDecision(userId, message, level);
+    res.json({ success: true });
+  });
+
   // Brokerage API Proxies
   app.get("/api/broker/trades", async (req, res) => {
     try {
@@ -303,12 +331,22 @@ async function startServer() {
   });
 
   app.post("/api/broker/trade", async (req, res) => {
+    const userId = req.headers["x-user-id"] as string | undefined;
     try {
       const { brokerage, ticker, shares, price, side, target, stop } = req.body;
 
+      logUserDecision(
+        userId,
+        `Broker Trade Requested: ${side?.toUpperCase()} ${shares} $${ticker?.toUpperCase()} via ${brokerage} (Price: $${price || 'MKT'}, Target: $${target || 'N/A'}, Stop: $${stop || 'N/A'})`,
+        "EXEC"
+      );
+
       if (brokerage === "robinhood") {
         let token = req.headers["x-robinhood-token"];
-        if (!token || typeof token !== 'string') throw new Error("Robinhood token missing. Please configure it in Settings.");
+        if (!token || typeof token !== 'string') {
+          logUserDecision(userId, "Robinhood trade failed: Token missing in headers", "ERROR");
+          throw new Error("Robinhood token missing. Please configure it in Settings.");
+        }
         if (token.startsWith('Bearer ')) token = token.slice(7);
 
         // 1. Get Account
@@ -319,11 +357,17 @@ async function startServer() {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           }
         });
-        if (!accountsRes.ok) throw new Error("Failed to fetch Robinhood accounts. Check your bearer token.");
+        if (!accountsRes.ok) {
+          logUserDecision(userId, `Robinhood trade failed: Fetch accounts returned status ${accountsRes.status}`, "ERROR");
+          throw new Error("Failed to fetch Robinhood accounts. Check your bearer token.");
+        }
 
         const accountsData = await accountsRes.json();
         const account = accountsData.results?.[0];
-        if (!account) throw new Error("No Robinhood account found");
+        if (!account) {
+          logUserDecision(userId, "Robinhood trade failed: No account results returned", "ERROR");
+          throw new Error("No Robinhood account found");
+        }
 
         // 2. Get Instrument
         const instrumentRes = await fetch(`https://api.robinhood.com/instruments/?symbol=${ticker}`, {
@@ -333,10 +377,16 @@ async function startServer() {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           }
         });
-        if (!instrumentRes.ok) throw new Error("Failed to fetch instrument.");
+        if (!instrumentRes.ok) {
+          logUserDecision(userId, `Robinhood trade failed: Fetch instrument returned status ${instrumentRes.status}`, "ERROR");
+          throw new Error("Failed to fetch instrument.");
+        }
         const instrumentData = await instrumentRes.json();
         const instrument = instrumentData.results?.[0];
-        if (!instrument) throw new Error("Instrument not found.");
+        if (!instrument) {
+          logUserDecision(userId, `Robinhood trade failed: Instrument for symbol ${ticker} not found`, "ERROR");
+          throw new Error("Instrument not found.");
+        }
 
         // 3. Place Order
         const priceStr = price ? (parseFloat(price) < 1 ? parseFloat(price).toFixed(4) : parseFloat(price).toFixed(2)) : undefined;
@@ -360,7 +410,7 @@ async function startServer() {
           bid_ask_timestamp: new Date().toISOString()
         };
 
-        console.log("Submitting order to Robinhood:", JSON.stringify(orderPayload, null, 2));
+        logUserDecision(userId, `Submitting order payload to Robinhood: ${JSON.stringify(orderPayload)}`, "INFO");
         const orderRes = await fetch("https://api.robinhood.com/orders/", {
           method: "POST",
           headers: {
@@ -373,25 +423,26 @@ async function startServer() {
         });
 
         const respText = await orderRes.text();
-        console.log("Robinhood Order Response Status:", orderRes.status);
-        console.log("Robinhood Order Response Body:", respText);
-
-        const fs = require('fs');
-        fs.appendFileSync('broker.log', `[${new Date().toISOString()}] STATUS: ${orderRes.status} BODY: ${respText}\n`);
+        logUserDecision(userId, `Robinhood order response status: ${orderRes.status} | body: ${respText}`, "INFO");
 
         if (!orderRes.ok) {
           throw new Error(`Robinhood trade failed: ${respText}`);
         }
 
         const orderData = JSON.parse(respText);
+        logUserDecision(userId, `Robinhood order submitted successfully: Order ID ${orderData.id}, Status ${orderData.state}`, "SUCCESS");
         return res.json({ success: true, order: { id: orderData.id, status: orderData.state } });
       } else if (brokerage === "interactivebrokers") {
         const url = req.headers["x-ibkr-url"];
-        if (!url || typeof url !== 'string') throw new Error("Interactive Brokers Gateway URL is missing.");
+        if (!url || typeof url !== 'string') {
+          logUserDecision(userId, "IBKR trade failed: Gateway URL is missing", "ERROR");
+          throw new Error("Interactive Brokers Gateway URL is missing.");
+        }
 
         const baseUrl = url.replace(/\/$/, '');
         const accountsRes = await fetch(`${baseUrl}/v1/api/portfolio/accounts`);
         if (!accountsRes.ok) {
+          logUserDecision(userId, `IBKR trade failed: Fetch accounts returned status ${accountsRes.status}`, "ERROR");
           if (accountsRes.status === 401) {
             throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL.");
           }
@@ -400,12 +451,15 @@ async function startServer() {
 
         const accountsData = await accountsRes.json();
         const accountId = accountsData?.[0]?.accountId || accountsData?.[0]?.id;
-        if (!accountId) throw new Error("No IBKR account found");
+        if (!accountId) {
+          logUserDecision(userId, "IBKR trade failed: No account found", "ERROR");
+          throw new Error("No IBKR account found");
+        }
 
         // 1. Resolve ticker symbol to IBKR contract ID (conid)
         let conid: number | null = null;
         try {
-          console.log(`Resolving IBKR conid for symbol: ${ticker}`);
+          logUserDecision(userId, `Resolving IBKR conid for symbol: ${ticker}`, "INFO");
           const secdefRes = await fetch(`${baseUrl}/v1/api/iserver/secdef/search`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -413,7 +467,7 @@ async function startServer() {
           });
           if (secdefRes.ok) {
             const secdefData = await secdefRes.json();
-            console.log("IBKR secdef search result:", JSON.stringify(secdefData));
+            logUserDecision(userId, `IBKR secdef search result: ${JSON.stringify(secdefData)}`, "INFO");
             if (Array.isArray(secdefData) && secdefData.length > 0) {
               const exactMatch = secdefData.find((item: any) => item.symbol?.toUpperCase() === ticker.toUpperCase() && item.conid);
               if (exactMatch && exactMatch.conid) {
@@ -423,6 +477,7 @@ async function startServer() {
               }
             }
           } else {
+            logUserDecision(userId, `IBKR secdef search failed with status ${secdefRes.status}`, "WARN");
             if (secdefRes.status === 401) {
               throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL.");
             }
@@ -430,7 +485,7 @@ async function startServer() {
             console.warn(`IBKR secdef/search returned status ${secdefRes.status}: ${errText}`);
           }
         } catch (searchErr: any) {
-          console.error("Error searching IBKR secdef:", searchErr);
+          logUserDecision(userId, `IBKR secdef search error: ${searchErr.message}`, "ERROR");
           if (searchErr.message && searchErr.message.includes("unauthenticated or expired")) {
             throw searchErr;
           }
@@ -442,11 +497,12 @@ async function startServer() {
           if (!isNaN(parsedTickerNum) && parsedTickerNum.toString() === ticker) {
             conid = parsedTickerNum;
           } else {
+            logUserDecision(userId, `IBKR trade failed: Could not resolve Contract ID (conid) for symbol ${ticker}`, "ERROR");
             throw new Error(`Could not resolve Contract ID (conid) for symbol: ${ticker}. Please make sure the IBKR client gateway is running, authenticated, and the symbol is valid.`);
           }
         }
 
-        console.log(`Resolved conid for ${ticker} is ${conid}`);
+        logUserDecision(userId, `Resolved conid for ${ticker} is ${conid}`, "INFO");
 
         let ordersPayload: any[] = [];
 
@@ -504,7 +560,7 @@ async function startServer() {
           }];
         }
 
-        console.log("Submitting order to IBKR:", JSON.stringify({ orders: ordersPayload }, null, 2));
+        logUserDecision(userId, `Submitting order payload to IBKR: ${JSON.stringify({ orders: ordersPayload })}`, "INFO");
 
         const orderRes = await fetch(`${baseUrl}/v1/api/iserver/account/${accountId}/orders`, {
           method: "POST",
@@ -513,10 +569,10 @@ async function startServer() {
         });
 
         const respText = await orderRes.text();
-        console.log("IBKR Order Response Status:", orderRes.status);
-        console.log("IBKR Order Response Body:", respText);
+        logUserDecision(userId, `IBKR order response status: ${orderRes.status} | body: ${respText}`, "INFO");
 
         if (!orderRes.ok) {
+          logUserDecision(userId, `IBKR order submission failed: status ${orderRes.status}`, "ERROR");
           if (orderRes.status === 401) {
             throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL (e.g., https://localhost:5000) and try again.");
           }
@@ -534,25 +590,26 @@ async function startServer() {
         if (Array.isArray(data)) {
           const failedOrder = data.find(o => o.order_status === "Failed" || o.status === "Failed");
           if (failedOrder) {
-            console.error("IBKR order placement failed leg:", failedOrder);
+            logUserDecision(userId, `IBKR order placement failed: ${failedOrder.text || failedOrder.warning_message || 'Unknown reason'}`, "ERROR");
             throw new Error(`IBKR trade placement failed: ${failedOrder.text || failedOrder.warning_message || 'Unknown reason'}`);
           }
         } else if (data && data.error) {
+          logUserDecision(userId, `IBKR order placement error: ${data.error}`, "ERROR");
           throw new Error(`IBKR trade failed: ${data.error}`);
         }
 
         // Auto-reply to warnings if the response is a confirmation array and they are approved
         while (Array.isArray(data) && data.length > 0 && data[0].id) {
           const prompt = data[0];
-          console.log(`IBKR returned confirmation prompt "${prompt.id}":`, JSON.stringify(prompt.message));
+          logUserDecision(userId, `IBKR returned confirmation prompt "${prompt.id}" (messageIds: ${JSON.stringify(prompt.messageIds)})`, "WARN");
 
           const isApproved = prompt.messageIds && prompt.messageIds.every((id: string) => approvedWarnings.includes(id));
           if (!isApproved) {
-            console.log(`Prompt "${prompt.id}" contains unapproved messageIds ${JSON.stringify(prompt.messageIds)}. Halting order placement for client approval.`);
+            logUserDecision(userId, `Halting order placement for client warning approval. Message: "${prompt.message}"`, "WARN");
             return res.json({ requiresConfirmation: true, prompts: data });
           }
 
-          console.log(`Prompt "${prompt.id}" (messageIds: ${JSON.stringify(prompt.messageIds)}) is already approved. Auto-confirming...`);
+          logUserDecision(userId, `Prompt "${prompt.id}" is already approved. Auto-confirming...`, "INFO");
 
           // Send confirmed = true to the reply endpoint
           const replyRes = await fetch(`${baseUrl}/v1/api/iserver/reply/${prompt.id}`, {
@@ -562,6 +619,7 @@ async function startServer() {
           });
 
           if (!replyRes.ok) {
+            logUserDecision(userId, `IBKR warning auto-reply failed: status ${replyRes.status}`, "ERROR");
             if (replyRes.status === 401) {
               throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL.");
             }
@@ -570,26 +628,31 @@ async function startServer() {
           }
 
           const replyText = await replyRes.text();
-          console.log("IBKR confirmation reply response status:", replyRes.status);
-          console.log("IBKR confirmation reply response body:", replyText);
+          logUserDecision(userId, `IBKR auto-reply response status: ${replyRes.status} | body: ${replyText}`, "INFO");
           data = JSON.parse(replyText);
         }
 
+        logUserDecision(userId, `IBKR order submission complete: ${JSON.stringify(data)}`, "SUCCESS");
         res.json(data);
       } else {
+        logUserDecision(userId, "Simulated trade processed successfully", "SUCCESS");
         res.json({ success: true, simulated: true });
       }
     } catch (error: any) {
-      console.error("Trade API execution error:", error);
+      logUserDecision(userId, `Trade API execution error: ${error.message}`, "ERROR");
       res.status(500).json({ error: error.message });
     }
   });
 
   app.post("/api/broker/ibkr/reply", async (req, res) => {
+    const userId = req.headers["x-user-id"] as string | undefined;
     try {
       const { promptId, confirmed } = req.body;
       const url = req.headers["x-ibkr-url"];
-      if (!url || typeof url !== 'string') throw new Error("Interactive Brokers Gateway URL is missing.");
+      if (!url || typeof url !== 'string') {
+        logUserDecision(userId, "IBKR manual reply failed: Gateway URL is missing", "ERROR");
+        throw new Error("Interactive Brokers Gateway URL is missing.");
+      }
 
       const baseUrl = url.replace(/\/$/, '');
       const approvedWarningsHeader = req.headers["x-approved-ibkr-warnings"];
@@ -597,7 +660,7 @@ async function startServer() {
         ? approvedWarningsHeader.split(',').map(s => s.trim()).filter(s => s)
         : [];
 
-      console.log(`Submitting user manual reply for prompt "${promptId}" (confirmed: ${confirmed})`);
+      logUserDecision(userId, `Submitting user manual reply for prompt "${promptId}" (confirmed: ${confirmed})`, "EXEC");
 
       const replyRes = await fetch(`${baseUrl}/v1/api/iserver/reply/${promptId}`, {
         method: "POST",
@@ -606,6 +669,7 @@ async function startServer() {
       });
 
       if (!replyRes.ok) {
+        logUserDecision(userId, `IBKR manual reply failed: status ${replyRes.status}`, "ERROR");
         if (replyRes.status === 401) {
           throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL.");
         }
@@ -614,23 +678,22 @@ async function startServer() {
       }
 
       const replyText = await replyRes.text();
-      console.log("IBKR manual reply response status:", replyRes.status);
-      console.log("IBKR manual reply response body:", replyText);
+      logUserDecision(userId, `IBKR manual reply response status: ${replyRes.status} | body: ${replyText}`, "INFO");
 
       let data = JSON.parse(replyText);
 
       // Auto-reply to subsequent warnings if they are already approved
       while (Array.isArray(data) && data.length > 0 && data[0].id) {
         const prompt = data[0];
-        console.log(`IBKR returned subsequent confirmation prompt "${prompt.id}":`, JSON.stringify(prompt.message));
+        logUserDecision(userId, `IBKR returned subsequent confirmation prompt "${prompt.id}" (messageIds: ${JSON.stringify(prompt.messageIds)})`, "WARN");
 
         const isApproved = prompt.messageIds && prompt.messageIds.every((id: string) => approvedWarnings.includes(id));
         if (!isApproved) {
-          console.log(`Subsequent prompt "${prompt.id}" requires client approval.`);
+          logUserDecision(userId, `Halting order placement for subsequent client warning approval. Message: "${prompt.message}"`, "WARN");
           return res.json({ requiresConfirmation: true, prompts: data });
         }
 
-        console.log(`Subsequent prompt "${prompt.id}" is already approved. Auto-confirming...`);
+        logUserDecision(userId, `Subsequent prompt "${prompt.id}" is already approved. Auto-confirming...`, "INFO");
 
         const nextReplyRes = await fetch(`${baseUrl}/v1/api/iserver/reply/${prompt.id}`, {
           method: "POST",
@@ -639,6 +702,7 @@ async function startServer() {
         });
 
         if (!nextReplyRes.ok) {
+          logUserDecision(userId, `IBKR auto-reply to subsequent prompt failed: status ${nextReplyRes.status}`, "ERROR");
           if (nextReplyRes.status === 401) {
             throw new Error("IBKR Gateway session is unauthenticated or expired. Please log in at your Gateway URL.");
           }
@@ -647,7 +711,7 @@ async function startServer() {
         }
 
         const nextReplyText = await nextReplyRes.text();
-        console.log("IBKR subsequent confirmation reply response body:", nextReplyText);
+        logUserDecision(userId, `IBKR subsequent auto-reply response body: ${nextReplyText}`, "INFO");
         data = JSON.parse(nextReplyText);
       }
 
@@ -655,14 +719,15 @@ async function startServer() {
       if (Array.isArray(data)) {
         const failedOrder = data.find(o => o.order_status === "Failed" || o.status === "Failed");
         if (failedOrder) {
-          console.error("IBKR order reply finished with failed leg:", failedOrder);
+          logUserDecision(userId, `IBKR order reply finished with failed leg: ${failedOrder.text || failedOrder.warning_message || 'Unknown reason'}`, "ERROR");
           throw new Error(`IBKR trade placement failed: ${failedOrder.text || failedOrder.warning_message || 'Unknown reason'}`);
         }
       }
 
+      logUserDecision(userId, `IBKR manual reply flow completed: ${JSON.stringify(data)}`, "SUCCESS");
       res.json(data);
     } catch (error: any) {
-      console.error("IBKR Reply API error:", error);
+      logUserDecision(userId, `IBKR Reply API error: ${error.message}`, "ERROR");
       res.status(500).json({ error: error.message });
     }
   });

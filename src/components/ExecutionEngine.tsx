@@ -3,6 +3,7 @@ import { auth, db } from '../lib/firebase';
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { UserPreferences, LogMessage, SimulatedTrade, MarketGainer } from '../types';
+import { logLocalDecision } from '../lib/localLogger';
 import { useBrokerage } from '../hooks/useBrokerage';
 import {
   detectBullFlag,
@@ -89,6 +90,7 @@ export function ExecutionEngine({
       ticker
     };
     setLogs((prev) => [...prev.slice(-49), newLog]); // Keep last 50 logs
+    logLocalDecision(text, type);
   }, []);
 
   const { balance, setBalance, pnl, pnlPercent, connectionStatus, executeTrade, replyToIbkrPrompt } = useBrokerage(
