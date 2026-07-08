@@ -423,7 +423,36 @@ export function ExecutionEngine({
                 return;
               }
 
-              addLog(`[CATALYST] ✓ Valid catalyst found for $${activeTrade.ticker}: "${catalystResult.matchedKeyword}" — "${activeTrade.catalyst}"`, 'found', activeTrade.ticker);
+              addLog(`[CATALYST] ✓ Valid keyword catalyst found for $${activeTrade.ticker}: "${catalystResult.matchedKeyword}" — "${activeTrade.catalyst}"`, 'found', activeTrade.ticker);
+
+              // Gemini Sentiment Analysis Filter
+              if (preferencesRef.current.geminiSentimentFilter) {
+                addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
+                try {
+                  const res = await fetch('/api/news/sentiment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      ticker: activeTrade.ticker,
+                      headline: activeTrade.catalyst
+                    })
+                  });
+                  if (!res.ok) {
+                    throw new Error(`Server returned status ${res.status}`);
+                  }
+                  const data = await res.json();
+                  if (!data.isPositive) {
+                    addLog(`[ABORT] Gemini determined negative/neutral news sentiment for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                    await updateCurrentTrade(null);
+                    changeStep(0);
+                    return;
+                  }
+                  addLog(`[GEMINI] ✓ Positive news sentiment confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
+                } catch (err: any) {
+                  addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Defaulting to positive sentiment filter bypass.`, 'warn', activeTrade.ticker);
+                }
+              }
+
               changeStep(2);
             } else {
               changeStep(0);

@@ -38,7 +38,8 @@ export function Dashboard() {
   const [preferences, setPreferences] = useState<UserPreferences>({ 
     markets: ['NASDAQ', 'NYSE', 'OTC', 'Warrants', 'Foreign'], 
     robinhoodOnly: true, 
-    brokerage: 'none' 
+    brokerage: 'none',
+    geminiSentimentFilter: true
   });
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [retryTrigger, setRetryTrigger] = useState(0);

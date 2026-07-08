@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserPreferences } from '../../types';
-import { Filter, Clock } from 'lucide-react';
+import { Filter, Clock, Sparkles } from 'lucide-react';
 
 interface FilterSettingsProps {
   showPreferences: boolean;
@@ -52,6 +52,13 @@ export function FilterSettings({
     onSavePreferences({
       ...preferences,
       extendedTradingHours: checked
+    });
+  };
+
+  const handleGeminiFilterChange = (checked: boolean) => {
+    onSavePreferences({
+      ...preferences,
+      geminiSentimentFilter: checked
     });
   };
 
@@ -133,6 +140,28 @@ export function FilterSettings({
                 <span className="font-semibold text-zinc-300">Robinhood Platform Compatible Only</span>
                 <p className="text-[10px] text-zinc-500 leading-normal mt-0.5">
                   Filter out OTC markets, warrants, and foreign dual-listed tickers that are not tradable on Robinhood.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Gemini AI Sentiment Check */}
+          <div className="border-t border-zinc-800 pt-3">
+            <span className="block text-xs font-bold text-zinc-300 mb-2 flex items-center gap-1.5 text-purple-400">
+              <Sparkles className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
+              Gemini AI News Sentiment Analysis (gemini-2.0-flash-lite)
+            </span>
+            <label className="flex items-start gap-2.5 text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={preferences.geminiSentimentFilter || false}
+                onChange={(e) => handleGeminiFilterChange(e.target.checked)}
+                className="mt-0.5 rounded border-zinc-800 bg-zinc-900 text-purple-500 focus:ring-0 focus:ring-offset-0 focus:border-purple-500 checked:bg-purple-600 checked:border-purple-600"
+              />
+              <div>
+                <span className="font-semibold text-zinc-300">Enable Gemini Sentiment Filter</span>
+                <p className="text-[10px] text-zinc-500 leading-normal mt-0.5">
+                  Use Gemini Flash Lite to analyze breaking news headlines. If sentiment is determined to be negative or neutral for the company, the engine will skip the trade setup.
                 </p>
               </div>
             </label>

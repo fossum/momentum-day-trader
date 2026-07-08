@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import fs from "fs";
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -242,6 +243,59 @@ async function startServer() {
       const data = await response.json();
       res.json(data);
     } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/news/sentiment", async (req, res) => {
+    try {
+      const { ticker, headline } = req.body;
+      if (!ticker || !headline) {
+        return res.status(400).json({ error: "Ticker and headline are required" });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        console.warn("GEMINI_API_KEY is not configured, bypassing sentiment check");
+        return res.json({ isPositive: true, reason: "GEMINI_API_KEY not configured, sentiment check bypassed." });
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Analyze the sentiment of the following news headline/catalyst for the stock symbol "${ticker}". Determine if the news is positive (bullish) or negative (bearish/neutral) for the stock price.
+
+Headline: "${headline}"`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              isPositive: {
+                type: "BOOLEAN",
+                description: "True if the news is positive/bullish for the company, false if negative or bearish/neutral."
+              },
+              reason: {
+                type: "STRING",
+                description: "A short, one-sentence explanation of the sentiment decision."
+              }
+            },
+            required: ["isPositive", "reason"]
+          }
+        }
+      });
+
+      if (!response.text) {
+        throw new Error("No text response received from Gemini API");
+      }
+
+      const parsed = JSON.parse(response.text);
+      res.json({
+        isPositive: parsed.isPositive === true,
+        reason: parsed.reason || "No reason provided."
+      });
+    } catch (error: any) {
+      console.error(`Gemini sentiment check failed for ${req.body.ticker || "unknown"}:`, error.message);
       res.status(500).json({ error: error.message });
     }
   });

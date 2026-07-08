@@ -66,6 +66,7 @@ export interface UserPreferences {
   positionSize?: string;
   approvedIbkrWarnings?: string[];
   extendedTradingHours?: boolean;
+  geminiSentimentFilter?: boolean;
 }
 
 export interface LowFloatTicker {
