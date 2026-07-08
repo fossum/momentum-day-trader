@@ -30,6 +30,24 @@
         "robinhoodOnly": { "type": "boolean" }
       },
       "required": ["markets", "robinhoodOnly"]
+    },
+    "ExecutionState": {
+      "title": "ExecutionState",
+      "description": "Represents the active simulated trade state",
+      "type": "object",
+      "properties": {
+        "ticker": { "type": "string" },
+        "float": { "type": "string" },
+        "catalyst": { "type": "string" },
+        "setup": { "type": "string" },
+        "entryPrice": { "type": "number" },
+        "exitPrice": { "type": "number" },
+        "shares": { "type": "number" },
+        "pnl": { "type": "number" },
+        "target": { "type": "number" },
+        "stop": { "type": "number" },
+        "empty": { "type": "boolean" }
+      }
     }
   },
   "firestore": {
@@ -40,6 +58,10 @@
     "users/{userId}/preferences/{prefId}": {
       "schema": "Preferences",
       "description": "Collection of user preferences/settings"
+    },
+    "users/{userId}/executionState/{docId}": {
+      "schema": "ExecutionState",
+      "description": "Active trade execution state of the simulation engine"
     }
   }
 }

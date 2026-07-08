@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from '../lib/firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, writeBatch, doc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, writeBatch, doc, getDoc, setDoc } from 'firebase/firestore';
 import { Trade, FmpQuote, FmpNews, MarketGainer } from '../types';
 import { 
   LineChart, 
@@ -19,11 +19,16 @@ import {
   PlusCircle, 
   Info,
   Layers,
-  ArrowRight
+  ArrowRight,
+  AlertCircle,
+  Settings,
+  X,
+  Check
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
-import { DryModeSimulator } from './DryModeSimulator';
+import { ExecutionEngine } from './ExecutionEngine';
+import { UserPreferences } from '../types';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -68,12 +73,13 @@ function isMarketScannerActive(): boolean {
     if (isAM && hour === 12) hour24 = 0;
     
     const totalMinutes = hour24 * 60 + minute;
-    const startMinutes = 6 * 60; // 6:00 AM
-    const endMinutes = 10 * 60; // 10:00 AM
+    // US Market is open from 9:30 AM to 4:00 PM Eastern Time
+    const startMinutes = 9 * 60 + 30; // 9:30 AM
+    const endMinutes = 16 * 60; // 4:00 PM
     
     return totalMinutes >= startMinutes && totalMinutes <= endMinutes;
   } catch (error) {
-    console.error('Timezone formatter error:', error);
+    console.warn('Timezone formatter error:', error);
     return true; // fail-safe
   }
 }
@@ -87,6 +93,16 @@ export function Dashboard() {
   const [gainers, setGainers] = useState<MarketGainer[]>([]);
   const [loadingGainers, setLoadingGainers] = useState(false);
   const [isScannerHours, setIsScannerHours] = useState(isMarketScannerActive());
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [preferences, setPreferences] = useState<UserPreferences>({ markets: ['NASDAQ', 'NYSE', 'OTC', 'Warrants', 'Foreign'], robinhoodOnly: true, brokerage: 'none' });
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [retryTrigger, setRetryTrigger] = useState(0);
+  
+  const [rhUsername, setRhUsername] = useState('');
+  const [rhPassword, setRhPassword] = useState('');
+  const [rhValidating, setRhValidating] = useState(false);
+  const [rhMessage, setRhMessage] = useState<{type: 'error' | 'success', text: string} | null>(null);
 
   // Form state
   const [ticker, setTicker] = useState('');
@@ -109,29 +125,151 @@ export function Dashboard() {
   useEffect(() => {
     if (!auth.currentUser) return;
     
-    const q = query(
-      collection(db, `users/${auth.currentUser.uid}/trades`),
-      orderBy('timestamp', 'desc')
-    );
+    let unsubscribe: () => void = () => {};
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const tradesData: Trade[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        tradesData.push({
-          id: doc.id,
-          ...data,
-          // Handle Firestore timestamp
-          timestamp: data.timestamp?.toMillis() || Date.now()
-        } as Trade);
+    const loadTrades = async () => {
+      // Try to load from broker if not "none"
+      if (preferences.brokerage && preferences.brokerage !== 'none') {
+        if (preferences.brokerage === 'robinhood' && !preferences.robinhoodToken) {
+          console.warn("Robinhood token missing, skipping broker trade fetch");
+        } else {
+          try {
+            const res = await fetch(`/api/broker/trades?brokerage=${preferences.brokerage}`, {
+              headers: {
+                "x-robinhood-token": preferences.robinhoodToken || "",
+                "x-lightspeed-key": preferences.lightspeedKey || "",
+                "x-ibkr-url": preferences.ibkrUrl || ""
+              }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              setTrades(data);
+              setDbError(null);
+              return; // Successfully loaded from broker
+            } else {
+              console.warn("Failed to fetch trades from broker, falling back to database");
+            }
+          } catch (err) {
+            console.warn("Failed to fetch trades from broker, falling back to database", err);
+          }
+        }
+      }
+
+      // Fallback to database
+      const q = query(
+        collection(db, `users/${auth.currentUser!.uid}/trades`),
+        orderBy('timestamp', 'desc')
+      );
+
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const tradesData: Trade[] = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          tradesData.push({
+            id: doc.id,
+            ...data,
+            // Handle Firestore timestamp
+            timestamp: data.timestamp?.toMillis() || Date.now()
+          } as Trade);
+        });
+        setTrades(tradesData);
+        setDbError(null);
+      }, (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, `users/${auth.currentUser?.uid}/trades`);
+        } catch (e: any) {
+          let msg = "Database connection error.";
+          try {
+            const parsed = JSON.parse(e.message);
+            msg = parsed.error || msg;
+          } catch {
+            msg = e.message;
+          }
+          setDbError(msg);
+        }
       });
-      setTrades(tradesData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${auth.currentUser?.uid}/trades`);
-    });
+    };
+    
+    loadTrades();
 
-    return () => unsubscribe();
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [preferences.brokerage]);
+
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const fetchPrefs = async () => {
+      try {
+        const docRef = doc(db, `users/${auth.currentUser?.uid}/preferences`, 'settings');
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setPreferences(docSnap.data() as UserPreferences);
+        }
+      } catch (err) {
+        console.warn('Error fetching preferences:', err);
+      }
+    };
+    fetchPrefs();
   }, []);
+
+  const validateRobinhood = async () => {
+    if (!rhUsername || !rhPassword) {
+      setRhMessage({ type: 'error', text: 'Username and password are required' });
+      return;
+    }
+    setRhValidating(true);
+    setRhMessage(null);
+    try {
+      const res = await fetch("/api/broker/robinhood/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: rhUsername, password: rhPassword })
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setPreferences(prev => ({ ...prev, robinhoodToken: data.token }));
+        setRhMessage({ type: 'success', text: 'Credentials validated! Token acquired.' });
+        setRhUsername('');
+        setRhPassword('');
+      } else {
+        setRhMessage({ type: 'error', text: data.error || 'Authentication failed' });
+      }
+    } catch (err: any) {
+      setRhMessage({ type: 'error', text: err.message || 'Connection error' });
+    } finally {
+      setRhValidating(false);
+    }
+  };
+
+  const savePreferences = async (newPrefs: UserPreferences, shouldCloseSettings = true) => {
+    if (!auth.currentUser) return;
+    setSavingPrefs(true);
+    try {
+      const docRef = doc(db, `users/${auth.currentUser.uid}/preferences`, 'settings');
+      await setDoc(docRef, newPrefs);
+      setPreferences(newPrefs);
+      setRetryTrigger(prev => prev + 1); // Trigger broker connection retry
+      if (shouldCloseSettings) {
+        setIsSettingsOpen(false);
+      }
+    } catch (err: any) {
+      try {
+        handleFirestoreError(err, OperationType.WRITE, `users/${auth.currentUser?.uid}/preferences/settings`);
+      } catch (handledErr: any) {
+        let msg = "Database connection error.";
+        try {
+          const parsed = JSON.parse(handledErr.message);
+          msg = parsed.error || msg;
+        } catch {
+          msg = handledErr.message;
+        }
+        setDbError(msg);
+      }
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
 
   useEffect(() => {
     const fetchGainers = async () => {
@@ -152,7 +290,7 @@ export function Dashboard() {
           setGainers(Array.isArray(data) ? data.slice(0, 15) : []);
         }
       } catch (err) {
-        console.error(err);
+        console.warn(err);
       } finally {
         setLoadingGainers(false);
       }
@@ -187,7 +325,7 @@ export function Dashboard() {
       
       setNews(newsData || []);
     } catch (err) {
-      console.error(err);
+      console.warn(err);
     } finally {
       setLoadingSearch(false);
     }
@@ -209,6 +347,32 @@ export function Dashboard() {
     const pnl = (exit - entry) * numShares;
 
     try {
+      if (preferences.brokerage && preferences.brokerage !== 'none') {
+        // Post trade to actual broker via API
+        const res = await fetch("/api/broker/trade", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-robinhood-token": preferences.robinhoodToken || "",
+            "x-lightspeed-key": preferences.lightspeedKey || "",
+            "x-ibkr-url": preferences.ibkrUrl || ""
+          },
+          body: JSON.stringify({
+            brokerage: preferences.brokerage,
+            ticker: ticker.toUpperCase(),
+            shares: numShares,
+            price: exit, // Simplification: assume closing trade at exit price
+            side: "sell"
+          })
+        });
+        
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(`Brokerage error: ${errorData.error || res.statusText}`);
+        }
+      }
+
+      // Also log it into Firestore history for UI fallback
       await addDoc(collection(db, `users/${auth.currentUser.uid}/trades`), {
         userId: auth.currentUser.uid,
         ticker: ticker.toUpperCase(),
@@ -226,8 +390,19 @@ export function Dashboard() {
       setExitPrice('');
       setShares('');
       setNotes('');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `users/${auth.currentUser.uid}/trades`);
+    } catch (err: any) {
+      try {
+        handleFirestoreError(err, OperationType.CREATE, `users/${auth.currentUser.uid}/trades`);
+      } catch (handledErr: any) {
+        let msg = "Database connection error.";
+        try {
+          const parsed = JSON.parse(handledErr.message);
+          msg = parsed.error || msg;
+        } catch {
+          msg = handledErr.message;
+        }
+        setDbError(msg);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -253,8 +428,19 @@ export function Dashboard() {
       });
       await batch.commit();
       setConfirmClear(false);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `users/${auth.currentUser.uid}/trades`);
+    } catch (err: any) {
+      try {
+        handleFirestoreError(err, OperationType.DELETE, `users/${auth.currentUser.uid}/trades`);
+      } catch (handledErr: any) {
+        let msg = "Database connection error.";
+        try {
+          const parsed = JSON.parse(handledErr.message);
+          msg = parsed.error || msg;
+        } catch {
+          msg = handledErr.message;
+        }
+        setDbError(msg);
+      }
     }
   };
 
@@ -265,7 +451,7 @@ export function Dashboard() {
   const totalPnlPercent = trades.reduce((sum, trade) => sum + calculateTradePnlPercent(trade), 0);
 
   // Active Tab State
-  const [activeTab, setActiveTab] = useState<'manual' | 'live' | 'performance' | 'historical'>('manual');
+  const [activeTab, setActiveTab] = useState<'manual' | 'live' | 'performance' | 'historical'>('live');
 
   // Historical Filters State
   const [historySearch, setHistorySearch] = useState('');
@@ -329,13 +515,18 @@ export function Dashboard() {
 
   // Filtering for historical tab
   const filteredTrades = trades.filter(trade => {
-    const matchesSearch = trade.ticker.toLowerCase().includes(historySearch.toLowerCase()) || 
-                          trade.strategy.toLowerCase().includes(historySearch.toLowerCase()) ||
-                          (trade.notes && trade.notes.toLowerCase().includes(historySearch.toLowerCase()));
+    const searchString = historySearch.toLowerCase();
+    const strat = trade.strategy || '';
+    const note = trade.notes || '';
+    
+    const matchesSearch = !historySearch || 
+                          (trade.ticker && trade.ticker.toLowerCase().includes(searchString)) || 
+                          strat.toLowerCase().includes(searchString) ||
+                          note.toLowerCase().includes(searchString);
     
     const matchesStrategy = historyStrategyFilter === 'All' || 
-                            trade.strategy === historyStrategyFilter || 
-                            trade.strategy.includes(historyStrategyFilter);
+                            strat === historyStrategyFilter || 
+                            strat.includes(historyStrategyFilter);
     
     let matchesOutcome = true;
     const diff = trade.exitPrice - trade.entryPrice;
@@ -363,18 +554,37 @@ export function Dashboard() {
               <p className="text-[10px] text-zinc-500 font-mono hidden sm:block">ACTIVE SIMULATION SUITE</p>
             </div>
           </div>
-          <button
-            onClick={() => auth.signOut()}
-            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign Out
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="flex items-center gap-2 rounded-md p-2 text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100"
+              title="Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => auth.signOut()}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         
+        {dbError && (
+          <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-4 animate-fadeIn">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <div>
+              <h3 className="text-sm font-medium text-red-500">Database Connection Error</h3>
+              <p className="mt-1 text-sm text-red-400/80">{dbError}</p>
+            </div>
+          </div>
+        )}
+
         {/* Navigation Tabs Bar */}
         <div className="mb-8 border-b border-zinc-800">
           <div className="flex flex-wrap gap-1 sm:gap-2 -mb-px" aria-label="Tabs">
@@ -621,101 +831,100 @@ export function Dashboard() {
 
         {/* TAB 2: LIVE DATA & AUTOMATED SIMULATION */}
         <div className={activeTab === 'live' ? 'block animate-fadeIn' : 'hidden'}>
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-            {/* Column 1: Dry-Mode Simulator Controls */}
-            <div className="lg:col-span-1 space-y-6">
-              <DryModeSimulator onSelectTicker={performSearch} />
-            </div>
-
-            {/* Column 2: Live Gainers & Feed */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Top Gainers Card */}
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
-                  <div>
-                    <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                      <Activity className={`h-5 w-5 ${isScannerHours ? 'text-emerald-500' : 'text-zinc-500'}`} />
-                      Live Top Gainers
-                    </h2>
-                    <p className="text-xs text-zinc-500">6:00 AM - 10:00 AM EST (Mon-Fri)</p>
+          <div className="space-y-6 max-w-full">
+            <ExecutionEngine
+              onSelectTicker={performSearch}
+              preferences={preferences}
+              onSavePreferences={(newPrefs) => savePreferences(newPrefs, false)}
+              retryTrigger={retryTrigger}
+              topGainersSection={
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
+                    <div>
+                      <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                        <Activity className={`h-5 w-5 ${isScannerHours ? 'text-emerald-500' : 'text-zinc-500'}`} />
+                        Live Top Gainers
+                      </h2>
+                      <p className="text-xs text-zinc-500">9:30 AM - 4:00 PM EST (Mon-Fri)</p>
+                    </div>
+                    {loadingGainers && (
+                      <div className="text-xs text-emerald-400 flex items-center gap-2 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </span>
+                        Scanning Market...
+                      </div>
+                    )}
+                    {!isScannerHours && (
+                      <div className="text-xs bg-zinc-800 text-zinc-400 px-2 py-1 rounded font-medium border border-zinc-700">
+                        Scanner Off-hours
+                      </div>
+                    )}
                   </div>
-                  {loadingGainers && (
-                    <div className="text-xs text-emerald-400 flex items-center gap-2 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                      </span>
-                      Scanning Market...
-                    </div>
-                  )}
-                  {!isScannerHours && (
-                    <div className="text-xs bg-zinc-800 text-zinc-400 px-2 py-1 rounded font-medium border border-zinc-700">
-                      Scanner Off-hours
-                    </div>
-                  )}
-                </div>
 
-                <div className="overflow-x-auto">
-                  {!isScannerHours ? (
-                    <div className="text-center text-zinc-400 py-8 px-4 text-sm border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20 leading-relaxed">
-                      The automated live gainer scanner operates during pre-market and early market hours:<br />
-                      <strong className="text-emerald-400">6:00 AM - 10:00 AM EST, Monday through Friday</strong>.<br />
-                      <span className="text-xs text-zinc-500 mt-2 block">Outside of these hours, use the Dry-Mode Simulator on the left to simulate continuous active trading.</span>
-                    </div>
-                  ) : gainers.length === 0 && !loadingGainers ? (
-                    <div className="text-center text-zinc-500 py-6 text-sm bg-zinc-950/25 rounded-lg border border-zinc-800">No major market gainers tracked in this slot.</div>
-                  ) : (
-                    <div className="flex gap-4 pb-2 overflow-x-auto custom-scrollbar">
-                      {gainers.map((gainer) => (
-                        <button
-                          key={gainer.symbol}
-                          onClick={() => {
-                            setActiveTab('manual');
-                            performSearch(gainer.symbol);
-                          }}
-                          className="flex-shrink-0 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-left transition-all hover:border-emerald-500 hover:bg-zinc-900 cursor-pointer"
-                        >
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="font-bold text-white text-base">{gainer.symbol}</span>
-                            <span className="text-xs font-bold text-emerald-400">
-                              +{gainer.changesPercentage.toFixed(1)}%
-                            </span>
-                          </div>
-                          <div className="text-base font-bold text-zinc-100 mb-1">
-                            ${gainer.price.toFixed(2)}
-                          </div>
-                          <div className="text-[10px] text-zinc-500 truncate" title={gainer.name}>
-                            {gainer.name}
-                          </div>
-                          <div className="mt-2 text-[9px] text-zinc-400 bg-zinc-900/80 px-1.5 py-0.5 rounded flex items-center justify-between">
-                            <span>Scan Detail</span>
-                            <ArrowRight className="h-2.5 w-2.5 text-zinc-600" />
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Informative Help Guide */}
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-4">
-                <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
-                  <Info className="h-4 w-4 text-emerald-500" />
-                  Simulation & Live Data Suite Instructions
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-zinc-400 leading-relaxed">
-                  <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
-                    <span className="font-semibold text-zinc-300 block mb-1">How it works:</span>
-                    The <strong>Dry-Mode Simulator</strong> simulates live active scanners catching setups, formulating entry bids, choosing tight stops (based on Ross Cameron breakout guidelines), trailing, and executing exits.
-                  </div>
-                  <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
-                    <span className="font-semibold text-zinc-300 block mb-1">History Synchronization:</span>
-                    When a simulator trade concludes with profit/scratch/loss outcomes, the result is automatically added to your cloud Firestore logs and visible in the <strong>Historical Data</strong> tab.
+                  <div className="overflow-x-auto">
+                    {!isScannerHours ? (
+                      <div className="text-center text-zinc-400 py-8 px-4 text-sm border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20 leading-relaxed">
+                        The automated live gainer scanner operates during regular market hours:<br />
+                        <strong className="text-emerald-400">9:30 AM - 4:00 PM EST, Monday through Friday</strong>.<br />
+                        <span className="text-xs text-zinc-500 mt-2 block">Outside of these hours, use the Live Execution Engine above to simulate continuous active trading.</span>
+                      </div>
+                    ) : gainers.length === 0 && !loadingGainers ? (
+                      <div className="text-center text-zinc-500 py-6 text-sm bg-zinc-950/25 rounded-lg border border-zinc-800">No major market gainers tracked in this slot.</div>
+                    ) : (
+                      <div className="flex gap-4 pb-2 overflow-x-auto custom-scrollbar">
+                        {gainers.map((gainer) => (
+                          <button
+                            key={gainer.symbol}
+                            onClick={() => {
+                              setActiveTab('manual');
+                              performSearch(gainer.symbol);
+                            }}
+                            className="flex-shrink-0 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-left transition-all hover:border-emerald-500 hover:bg-zinc-900 cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="font-bold text-white text-base">{gainer.symbol}</span>
+                              <span className="text-xs font-bold text-emerald-400">
+                                +{gainer.changesPercentage.toFixed(1)}%
+                              </span>
+                            </div>
+                            <div className="text-base font-bold text-zinc-100 mb-1">
+                              ${gainer.price.toFixed(2)}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 truncate" title={gainer.name}>
+                              {gainer.name}
+                            </div>
+                            <div className="mt-2 text-[9px] text-zinc-400 bg-zinc-900/80 px-1.5 py-0.5 rounded flex items-center justify-between">
+                              <span>Scan Detail</span>
+                              <ArrowRight className="h-2.5 w-2.5 text-zinc-600" />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            </div>
+              }
+              helperTextSection={
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-4">
+                  <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
+                    <Info className="h-4 w-4 text-emerald-500" />
+                    Simulation & Live Data Suite Instructions
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-zinc-400 leading-relaxed">
+                    <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
+                      <span className="font-semibold text-zinc-300 block mb-1">How it works:</span>
+                      The <strong>Live Execution Engine</strong> simulates live active scanners catching setups, formulating entry bids, choosing tight stops (based on Ross Cameron breakout guidelines), trailing, and executing exits.
+                    </div>
+                    <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
+                      <span className="font-semibold text-zinc-300 block mb-1">History Synchronization:</span>
+                      When an execution engine trade concludes with profit/scratch/loss outcomes, the result is automatically added to your cloud Firestore logs and visible in the <strong>Historical Data</strong> tab.
+                    </div>
+                  </div>
+                </div>
+              }
+            />
           </div>
         </div>
 
@@ -872,7 +1081,7 @@ export function Dashboard() {
               <div className="text-center py-20 border border-dashed border-zinc-800 rounded-xl bg-zinc-900/50">
                 <BarChart3 className="h-10 w-10 text-zinc-600 mx-auto mb-3" />
                 <h3 className="font-semibold text-zinc-300 text-base">No Analytical Data</h3>
-                <p className="text-sm text-zinc-500 mt-1">Please log manual trades or launch the simulator in the Live Data tab to compile charts.</p>
+                <p className="text-sm text-zinc-500 mt-1">Please log manual trades or launch the execution engine in the Live Data tab to compile charts.</p>
               </div>
             )}
           </div>
@@ -1014,6 +1223,170 @@ export function Dashboard() {
         )}
 
       </main>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-950 p-6 shadow-xl relative animate-fadeIn">
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="absolute right-4 top-4 text-zinc-400 hover:text-zinc-100"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <h2 className="mb-6 text-xl font-bold text-zinc-100">Settings</h2>
+            
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-3">
+                  Brokerage Connection
+                </label>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="brokerage"
+                      value="none"
+                      checked={preferences.brokerage === 'none'}
+                      onChange={() => setPreferences({ ...preferences, brokerage: 'none' })}
+                      className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                    />
+                    <span className="text-sm text-zinc-200">No Connection (Simulated Mode)</span>
+                  </label>
+                  <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="brokerage"
+                        value="lightspeed"
+                        checked={preferences.brokerage === 'lightspeed'}
+                        onChange={() => setPreferences({ ...preferences, brokerage: 'lightspeed' })}
+                        className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                      />
+                      <span className="text-sm text-zinc-200">Lightspeed</span>
+                    </div>
+                    {preferences.brokerage === 'lightspeed' && (
+                      <div className="pl-7 pt-2">
+                        <input
+                          type="password"
+                          placeholder="Lightspeed API Key"
+                          value={preferences.lightspeedKey || ''}
+                          onChange={(e) => setPreferences({ ...preferences, lightspeedKey: e.target.value })}
+                          className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                      </div>
+                    )}
+                  </label>
+                  <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="brokerage"
+                        value="robinhood"
+                        checked={preferences.brokerage === 'robinhood'}
+                        onChange={() => setPreferences({ ...preferences, brokerage: 'robinhood' })}
+                        className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                      />
+                      <span className="text-sm text-zinc-200">Robinhood</span>
+                    </div>
+                    {preferences.brokerage === 'robinhood' && (
+                      <div className="pl-7 pt-2 flex flex-col gap-3">
+                        <div className="flex flex-col gap-2 p-3 bg-zinc-950/50 rounded border border-zinc-800">
+                          <span className="text-xs font-medium text-zinc-300">Login to Robinhood</span>
+                          <input
+                            type="text"
+                            placeholder="Username / Email"
+                            value={rhUsername}
+                            onChange={(e) => setRhUsername(e.target.value)}
+                            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                          <input
+                            type="password"
+                            placeholder="Password"
+                            value={rhPassword}
+                            onChange={(e) => setRhPassword(e.target.value)}
+                            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={validateRobinhood}
+                            disabled={rhValidating || !rhUsername || !rhPassword}
+                            className="mt-1 w-full rounded bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/20 transition-colors"
+                          >
+                            {rhValidating ? 'Validating...' : 'Validate Credentials'}
+                          </button>
+                          {rhMessage && (
+                            <div className={`text-xs p-2 rounded ${rhMessage.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                              {rhMessage.text}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-zinc-500">Or manually enter Bearer Token:</span>
+                          <input
+                            type="password"
+                            placeholder="Robinhood Bearer Token"
+                            value={preferences.robinhoodToken || ''}
+                            onChange={(e) => setPreferences({ ...preferences, robinhoodToken: e.target.value })}
+                            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                          {preferences.robinhoodToken && (
+                            <span className="text-xs text-emerald-500 flex items-center gap-1 mt-1">
+                              <Check className="w-3 h-3" /> Token configured
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </label>
+                  <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="brokerage"
+                        value="interactivebrokers"
+                        checked={preferences.brokerage === 'interactivebrokers'}
+                        onChange={() => setPreferences({ ...preferences, brokerage: 'interactivebrokers' })}
+                        className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                      />
+                      <span className="text-sm text-zinc-200">Interactive Brokers</span>
+                    </div>
+                    {preferences.brokerage === 'interactivebrokers' && (
+                      <div className="pl-7 pt-2">
+                        <input
+                          type="url"
+                          placeholder="Client Portal Gateway URL (e.g. https://your-ngrok-url.app)"
+                          value={preferences.ibkrUrl || ''}
+                          onChange={(e) => setPreferences({ ...preferences, ibkrUrl: e.target.value })}
+                          className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                      </div>
+                    )}
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 flex justify-end gap-3">
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+                disabled={savingPrefs}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => savePreferences(preferences)}
+                disabled={savingPrefs}
+                className="flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-600 transition-colors disabled:opacity-50"
+              >
+                {savingPrefs ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

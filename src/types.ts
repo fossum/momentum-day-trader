@@ -57,6 +57,13 @@ export interface MarketGainer {
 export interface UserPreferences {
   markets: string[];
   robinhoodOnly: boolean;
+  brokerage?: 'none' | 'robinhood' | 'lightspeed' | 'interactivebrokers';
+  robinhoodToken?: string;
+  lightspeedKey?: string;
+  ibkrUrl?: string;
+  trackedTickers?: string[];
+  blacklistedTickers?: string[];
+  positionSize?: string;
 }
 
 export interface LowFloatTicker {

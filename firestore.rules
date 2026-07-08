@@ -41,12 +41,25 @@ service cloud.firestore {
     function isValidPreferences(data) {
       return data.markets is list
         && data.markets.size() <= 10
-        && data.robinhoodOnly is bool;
+        && data.robinhoodOnly is bool
+        && (!('brokerage' in data) || data.brokerage == null || (data.brokerage is string && (data.brokerage == 'none' || data.brokerage == 'robinhood' || data.brokerage == 'lightspeed' || data.brokerage == 'interactivebrokers')))
+        && (!('robinhoodToken' in data) || data.robinhoodToken == null || data.robinhoodToken is string)
+        && (!('lightspeedKey' in data) || data.lightspeedKey == null || data.lightspeedKey is string)
+        && (!('ibkrUrl' in data) || data.ibkrUrl == null || data.ibkrUrl is string);
+    }
+
+    function isValidExecutionState(data) {
+      return ('empty' in data && data.empty == true)
+        || (data.ticker is string
+            && data.entryPrice is number
+            && data.exitPrice is number
+            && data.shares is number
+            && data.pnl is number);
     }
 
     match /users/{userId}/trades/{tradeId} {
       allow get: if isOwner(userId);
-      allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+      allow list: if isOwner(userId);
       allow create: if isOwner(userId)
         && isValidId(tradeId)
         && isValidTrade(incoming())
@@ -64,6 +77,15 @@ service cloud.firestore {
       allow create, update: if isOwner(userId)
         && isValidId(prefId)
         && isValidPreferences(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /users/{userId}/executionState/{docId} {
+      allow get: if isOwner(userId);
+      allow list: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && isValidId(docId)
+        && isValidExecutionState(incoming());
       allow delete: if isOwner(userId);
     }
   }
