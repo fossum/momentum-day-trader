@@ -73,3 +73,25 @@ export interface LowFloatTicker {
   onRobinhood: boolean;
   companyName: string;
 }
+
+export interface LogMessage {
+  id: string;
+  text: string;
+  type: 'info' | 'scan' | 'found' | 'exec' | 'success' | 'fail' | 'warn' | 'error';
+  time: string;
+  ticker?: string;
+}
+
+export interface SimulatedTrade {
+  ticker: string;
+  float: string;
+  catalyst: string;
+  setup: string;
+  entryPrice: number;
+  exitPrice: number;
+  shares: number;
+  pnl: number;
+  target: number;
+  stop: number;
+}
+

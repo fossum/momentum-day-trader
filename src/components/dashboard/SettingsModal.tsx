@@ -1,0 +1,200 @@
+import React from 'react';
+import { UserPreferences } from '../../types';
+import { X, Check } from 'lucide-react';
+
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  preferences: UserPreferences;
+  setPreferences: React.Dispatch<React.SetStateAction<UserPreferences>>;
+  onSave: (newPrefs: UserPreferences) => Promise<void>;
+  savingPrefs: boolean;
+  rhUsername: string;
+  setRhUsername: (val: string) => void;
+  rhPassword: string;
+  setRhPassword: (val: string) => void;
+  rhValidating: boolean;
+  rhMessage: { type: 'error' | 'success'; text: string } | null;
+  onValidateRobinhood: () => Promise<void>;
+}
+
+export function SettingsModal({
+  isOpen,
+  onClose,
+  preferences,
+  setPreferences,
+  onSave,
+  savingPrefs,
+  rhUsername,
+  setRhUsername,
+  rhPassword,
+  setRhPassword,
+  rhValidating,
+  rhMessage,
+  onValidateRobinhood
+}: SettingsModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-950 p-6 shadow-xl relative animate-fadeIn">
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 text-zinc-400 hover:text-zinc-100 focus:outline-none"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        <h2 className="mb-6 text-xl font-bold text-zinc-100">Settings</h2>
+        
+        <div className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-3">
+              Brokerage Connection
+            </label>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer select-none">
+                <input
+                  type="radio"
+                  name="brokerage"
+                  value="none"
+                  checked={preferences.brokerage === 'none'}
+                  onChange={() => setPreferences({ ...preferences, brokerage: 'none' })}
+                  className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                />
+                <span className="text-sm text-zinc-200">No Connection (Simulated Mode)</span>
+              </label>
+              <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer select-none">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    name="brokerage"
+                    value="lightspeed"
+                    checked={preferences.brokerage === 'lightspeed'}
+                    onChange={() => setPreferences({ ...preferences, brokerage: 'lightspeed' })}
+                    className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                  />
+                  <span className="text-sm text-zinc-200">Lightspeed</span>
+                </div>
+                {preferences.brokerage === 'lightspeed' && (
+                  <div className="pl-7 pt-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="password"
+                      placeholder="Lightspeed API Key"
+                      value={preferences.lightspeedKey || ''}
+                      onChange={(e) => setPreferences({ ...preferences, lightspeedKey: e.target.value })}
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                )}
+              </label>
+              <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer select-none">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    name="brokerage"
+                    value="robinhood"
+                    checked={preferences.brokerage === 'robinhood'}
+                    onChange={() => setPreferences({ ...preferences, brokerage: 'robinhood' })}
+                    className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                  />
+                  <span className="text-sm text-zinc-200">Robinhood</span>
+                </div>
+                {preferences.brokerage === 'robinhood' && (
+                  <div className="pl-7 pt-2 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex flex-col gap-2 p-3 bg-zinc-950/50 rounded border border-zinc-800">
+                      <span className="text-xs font-medium text-zinc-300">Login to Robinhood</span>
+                      <input
+                        type="text"
+                        placeholder="Username / Email"
+                        value={rhUsername}
+                        onChange={(e) => setRhUsername(e.target.value)}
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      <input
+                        type="password"
+                        placeholder="Password"
+                        value={rhPassword}
+                        onChange={(e) => setRhPassword(e.target.value)}
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={onValidateRobinhood}
+                        disabled={rhValidating || !rhUsername || !rhPassword}
+                        className="mt-1 w-full rounded bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/20 transition-colors focus:outline-none"
+                      >
+                        {rhValidating ? 'Validating...' : 'Validate Credentials'}
+                      </button>
+                      {rhMessage && (
+                        <div className={`text-xs p-2 rounded ${rhMessage.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                          {rhMessage.text}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs text-zinc-500">Or manually enter Bearer Token:</span>
+                      <input
+                        type="password"
+                        placeholder="Robinhood Bearer Token"
+                        value={preferences.robinhoodToken || ''}
+                        onChange={(e) => setPreferences({ ...preferences, robinhoodToken: e.target.value })}
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      {preferences.robinhoodToken && (
+                        <span className="text-xs text-emerald-500 flex items-center gap-1 mt-1 font-semibold">
+                          <Check className="w-3 h-3 text-emerald-500" /> Token configured
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </label>
+              <label className="flex flex-col gap-2 rounded-lg border border-zinc-800 p-3 hover:bg-zinc-900 cursor-pointer select-none">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    name="brokerage"
+                    value="interactivebrokers"
+                    checked={preferences.brokerage === 'interactivebrokers'}
+                    onChange={() => setPreferences({ ...preferences, brokerage: 'interactivebrokers' })}
+                    className="h-4 w-4 rounded-full border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                  />
+                  <span className="text-sm text-zinc-200">Interactive Brokers</span>
+                </div>
+                {preferences.brokerage === 'interactivebrokers' && (
+                  <div className="pl-7 pt-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="url"
+                      placeholder="Client Portal Gateway URL (e.g. https://your-ngrok-url.app)"
+                      value={preferences.ibkrUrl || ''}
+                      onChange={(e) => setPreferences({ ...preferences, ibkrUrl: e.target.value })}
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                )}
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors focus:outline-none"
+            disabled={savingPrefs}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave(preferences)}
+            disabled={savingPrefs}
+            className="flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-600 transition-colors disabled:opacity-50 focus:outline-none"
+          >
+            {savingPrefs ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
