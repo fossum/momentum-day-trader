@@ -27,3 +27,9 @@ FMP has deprecated legacy `/api/v3/*` endpoints for newly generated API keys, re
 ## 4. Top Gainers API
 * **Legacy URL:** `https://financialmodelingprep.com/api/v3/stock_market/gainers?apikey={key}`
 * **Stable URL:** `https://financialmodelingprep.com/stable/biggest-gainers?apikey={key}`
+
+## 5. 1-Minute Intraday Historical Charts API
+* **Legacy URL:** `https://financialmodelingprep.com/api/v3/historical-chart/1min/{ticker}?apikey={key}`
+* **Stable URL:** `https://financialmodelingprep.com/stable/historical-chart/1min?symbol={ticker}&apikey={key}`
+* **Format Change:** Same as 5min — the ticker must be passed as a query parameter `?symbol={ticker}` instead of a path parameter.
+* **Usage:** Used by the momentum algo pattern detector to fetch 1-minute OHLCV candle data for bull flag detection.

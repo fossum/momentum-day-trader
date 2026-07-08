@@ -357,6 +357,7 @@ export function Dashboard() {
               onSavePreferences={(newPrefs) => savePreferences(newPrefs, false)}
               retryTrigger={retryTrigger}
               onRetryConnection={() => setRetryTrigger(prev => prev + 1)}
+              gainers={gainers}
               topGainersSection={
                 <MarketScanner
                   gainers={gainers}
@@ -369,12 +370,12 @@ export function Dashboard() {
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-4">
                   <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5 font-sans">
                     <Info className="h-4 w-4 text-emerald-500" />
-                    Simulation & Live Data Suite Instructions
+                    Simulation &amp; Live Data Suite Instructions
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-zinc-400 leading-relaxed">
                     <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
                       <span className="font-semibold text-zinc-300 block mb-1">How it works:</span>
-                      The <strong>Live Execution Engine</strong> simulates live active scanners catching setups, formulating entry bids, choosing tight stops (based on Ross Cameron breakout guidelines), trailing, and executing exits.
+                      The <strong>Live Execution Engine</strong> scans FMP top gainers in real-time, validates catalysts, detects Ross Cameron bull flag patterns from 1-minute candle data, and executes breakout entries with tight risk management.
                     </div>
                     <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-950">
                       <span className="font-semibold text-zinc-300 block mb-1">History Synchronization:</span>

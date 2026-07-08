@@ -13,6 +13,8 @@ interface EngineControlsProps {
   preferences: UserPreferences;
   connectionStatus: 'success' | 'failed' | 'none';
   balance: number;
+  pnl?: number;
+  pnlPercent?: number;
   isConnecting?: boolean;
 }
 
@@ -27,6 +29,8 @@ export function EngineControls({
   preferences,
   connectionStatus,
   balance,
+  pnl = 0,
+  pnlPercent = 0,
   isConnecting = false
 }: EngineControlsProps) {
   const getBrokerageLabel = (brokerage?: string) => {
@@ -61,7 +65,12 @@ export function EngineControls({
             <span>Automated real-time scanner & executor.</span>
             <span className="text-zinc-600">&bull;</span>
             {connectionStatus === 'success' ? (
-              <span>Real Balance: ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span>
+                Real Balance: ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                <span className={`font-semibold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  ({pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}% / {pnl >= 0 ? '+$' : '-$'}{Math.abs(pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} P/L)
+                </span>
+              </span>
             ) : connectionStatus === 'failed' ? (
               <span className="text-rose-400 font-semibold">Offline / Connection Failed</span>
             ) : (

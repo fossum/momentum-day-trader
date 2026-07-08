@@ -11,7 +11,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 3001;
 
   // JSON middleware
   app.use(express.json());
@@ -180,7 +180,6 @@ async function startServer() {
         avgVolume,
         rvol: isNaN(rvol) ? 1.0 : rvol,
         catalyst,
-        sharesOutstanding: quote?.sharesOutstanding || 0,
         companyName: quote?.name || ticker
       });
     } catch (error: any) {

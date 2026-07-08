@@ -65,6 +65,7 @@ export interface UserPreferences {
   blacklistedTickers?: string[];
   positionSize?: string;
   approvedIbkrWarnings?: string[];
+  extendedTradingHours?: boolean;
 }
 
 export interface LowFloatTicker {

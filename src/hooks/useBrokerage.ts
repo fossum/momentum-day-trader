@@ -7,6 +7,8 @@ export function useBrokerage(
   addLogMessage?: (text: string, type: 'info' | 'scan' | 'found' | 'exec' | 'success' | 'fail' | 'warn' | 'error', ticker?: string) => void
 ) {
   const [balance, setBalance] = useState<number>(0);
+  const [pnl, setPnl] = useState<number>(0);
+  const [pnlPercent, setPnlPercent] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'success' | 'failed' | 'none'>('none');
   const connectionStatusRef = useRef<'success' | 'failed' | 'none'>('none');
   
@@ -36,6 +38,8 @@ export function useBrokerage(
 
     if (!preferences.brokerage || preferences.brokerage === 'none') {
       setBalance(prev => (prev === 0 ? 10000 : prev)); // Default simulated balance
+      setPnl(0);
+      setPnlPercent(0);
       if (connectionStatusRef.current !== 'none') {
         addLog('[SYSTEM] Switched to Simulated Mode.', 'info');
       }
@@ -52,6 +56,8 @@ export function useBrokerage(
           addLog(`[SYSTEM ERROR] ${msg}`, 'error');
         }
         setBalance(0);
+        setPnl(0);
+        setPnlPercent(0);
         connectionStatusRef.current = 'failed';
         setConnectionStatus('failed');
         return;
@@ -63,6 +69,8 @@ export function useBrokerage(
           addLog(`[SYSTEM ERROR] ${msg}`, 'error');
         }
         setBalance(0);
+        setPnl(0);
+        setPnlPercent(0);
         connectionStatusRef.current = 'failed';
         setConnectionStatus('failed');
         return;
@@ -74,6 +82,8 @@ export function useBrokerage(
           addLog(`[SYSTEM ERROR] ${msg}`, 'error');
         }
         setBalance(0);
+        setPnl(0);
+        setPnlPercent(0);
         connectionStatusRef.current = 'failed';
         setConnectionStatus('failed');
         return;
@@ -90,6 +100,8 @@ export function useBrokerage(
         if (res.ok) {
           const data = await res.json();
           setBalance(data.balance || 0);
+          setPnl(data.pnl || 0);
+          setPnlPercent(data.pnlPercent || 0);
           if (connectionStatusRef.current !== 'success') {
             addLog(
               `[SYSTEM] Connected successfully to ${getBrokerageLabel(preferences.brokerage)}. Real Balance: $${(data.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
@@ -108,6 +120,9 @@ export function useBrokerage(
           if (connectionStatusRef.current !== 'failed') {
             addLog(`[SYSTEM ERROR] Connection to ${getBrokerageLabel(preferences.brokerage)} failed: ${errMsg}`, 'error');
           }
+          setBalance(0);
+          setPnl(0);
+          setPnlPercent(0);
           connectionStatusRef.current = 'failed';
           setConnectionStatus('failed');
         }
@@ -116,6 +131,9 @@ export function useBrokerage(
         if (connectionStatusRef.current !== 'failed') {
           addLog(`[SYSTEM ERROR] Connection to ${getBrokerageLabel(preferences.brokerage)} failed: ${err.message}`, 'error');
         }
+        setBalance(0);
+        setPnl(0);
+        setPnlPercent(0);
         connectionStatusRef.current = 'failed';
         setConnectionStatus('failed');
       }
@@ -123,7 +141,7 @@ export function useBrokerage(
 
     fetchBalance();
 
-    const interval = setInterval(fetchBalance, 15000); // refresh every 15s
+    const interval = setInterval(fetchBalance, 30000); // refresh every 30s
     return () => {
       clearInterval(interval);
     };
@@ -224,6 +242,10 @@ export function useBrokerage(
   return {
     balance,
     setBalance,
+    pnl,
+    setPnl,
+    pnlPercent,
+    setPnlPercent,
     connectionStatus,
     isRhValidating,
     rhMessage,

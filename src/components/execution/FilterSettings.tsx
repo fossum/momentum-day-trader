@@ -1,6 +1,6 @@
 import React from 'react';
-import { UserPreferences, LowFloatTicker } from '../../types';
-import { Filter } from 'lucide-react';
+import { UserPreferences } from '../../types';
+import { Filter, Clock } from 'lucide-react';
 
 interface FilterSettingsProps {
   showPreferences: boolean;
@@ -11,7 +11,6 @@ interface FilterSettingsProps {
   blacklistedInput: string;
   setBlacklistedInput: (val: string) => void;
   isActive: boolean;
-  lowFloatTickers: LowFloatTicker[];
 }
 
 export function FilterSettings({
@@ -22,27 +21,13 @@ export function FilterSettings({
   connectionStatus,
   blacklistedInput,
   setBlacklistedInput,
-  isActive,
-  lowFloatTickers
+  isActive
 }: FilterSettingsProps) {
   const getBrokerageLabel = (brokerage?: string) => {
     if (brokerage === 'robinhood') return 'Robinhood';
     if (brokerage === 'interactivebrokers') return 'IBKR';
     if (brokerage === 'lightspeed') return 'Lightspeed';
     return 'Simulation';
-  };
-
-  const handleMarketChange = (market: string, isChecked: boolean) => {
-    let updatedMarkets;
-    if (isChecked) {
-      updatedMarkets = preferences.markets.filter((m) => m !== market);
-    } else {
-      updatedMarkets = [...preferences.markets, market];
-    }
-    onSavePreferences({
-      ...preferences,
-      markets: updatedMarkets
-    });
   };
 
   const handleBlacklistBlur = () => {
@@ -63,11 +48,12 @@ export function FilterSettings({
     });
   };
 
-  const filteredCount = lowFloatTickers.filter((item) => {
-    const marketMatch = preferences.markets.includes(item.market);
-    const rhMatch = !preferences.robinhoodOnly || item.onRobinhood;
-    return marketMatch && rhMatch;
-  }).length;
+  const handleExtendedHoursChange = (checked: boolean) => {
+    onSavePreferences({
+      ...preferences,
+      extendedTradingHours: checked
+    });
+  };
 
   return (
     <div className="mb-4">
@@ -78,7 +64,7 @@ export function FilterSettings({
       >
         <span className="flex items-center gap-1.5 font-sans">
           <Filter className="h-3.5 w-3.5 text-zinc-500" />
-          Stock Markets & Platform Restrictions
+          Engine Filters &amp; Restrictions
         </span>
         <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
           connectionStatus === 'success'
@@ -97,30 +83,26 @@ export function FilterSettings({
 
       {showPreferences && (
         <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-4 space-y-4 animate-fadeIn">
-          {/* Markets Checklist */}
+          {/* Trading Window */}
           <div>
-            <span className="block text-xs font-bold text-zinc-300 mb-2">Enable / Disable Stock Markets:</span>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {['NASDAQ', 'NYSE', 'OTC', 'Foreign', 'Warrants'].map((market) => {
-                const isChecked = preferences.markets.includes(market);
-                return (
-                  <label key={market} className="flex items-center gap-2 text-zinc-400 hover:text-zinc-200 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => handleMarketChange(market, isChecked)}
-                      className="rounded border-zinc-800 bg-zinc-900 text-emerald-500 focus:ring-0 focus:ring-offset-0"
-                    />
-                    <span>{market}</span>
-                    {market === 'NASDAQ' || market === 'NYSE' ? (
-                      <span className="text-[9px] text-zinc-600 bg-zinc-900 px-1 rounded">Listed</span>
-                    ) : (
-                      <span className="text-[9px] text-amber-500/80 bg-amber-500/10 px-1 rounded border border-amber-500/10">Special</span>
-                    )}
-                  </label>
-                );
-              })}
-            </div>
+            <span className="block text-xs font-bold text-zinc-300 mb-2 flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-zinc-500" />
+              Trading Window (EST)
+            </span>
+            <label className="flex items-start gap-2.5 text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={preferences.extendedTradingHours || false}
+                onChange={(e) => handleExtendedHoursChange(e.target.checked)}
+                className="mt-0.5 rounded border-zinc-800 bg-zinc-900 text-emerald-500 focus:ring-0 focus:ring-offset-0"
+              />
+              <div>
+                <span className="font-semibold text-zinc-300">Extended Trading Hours (9:30 AM – 4:00 PM)</span>
+                <p className="text-[10px] text-zinc-500 leading-normal mt-0.5">
+                  By default, the engine only trades during the Ross Cameron morning window (9:30 – 11:30 AM EST) where 80%+ of momentum profits occur. Enable this to trade the full session.
+                </p>
+              </div>
+            </label>
           </div>
 
           {/* Blacklisted Tickers */}
@@ -150,15 +132,15 @@ export function FilterSettings({
               <div>
                 <span className="font-semibold text-zinc-300">Robinhood Platform Compatible Only</span>
                 <p className="text-[10px] text-zinc-500 leading-normal mt-0.5">
-                  Filter out OTC markets, warrants, and foreign dual-listed tickers that are not tradable on Robinhood. Disable this to simulate the entire small-cap universe.
+                  Filter out OTC markets, warrants, and foreign dual-listed tickers that are not tradable on Robinhood.
                 </p>
               </div>
             </label>
           </div>
           
-          {/* Filtered Count Info */}
+          {/* Live Screening Info */}
           <div className="text-[10px] text-zinc-500 bg-zinc-900/40 p-2 rounded border border-zinc-900 flex justify-between items-center">
-            <span>Matching stocks: <strong className="text-zinc-300">{filteredCount} / {lowFloatTickers.length}</strong></span>
+            <span>Screener: <strong className="text-zinc-300">Live FMP Top Gainers</strong> → Price $2–$20, Gain ≥ 10%, RVOL ≥ 5x</span>
             <span>Cloud Saved Settings</span>
           </div>
         </div>
