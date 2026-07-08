@@ -48,6 +48,7 @@ interface ExecutionEngineProps {
   preferences: UserPreferences;
   onSavePreferences: (newPrefs: UserPreferences) => Promise<void>;
   retryTrigger?: number;
+  onRetryConnection?: () => void;
 }
 
 export function ExecutionEngine({
@@ -56,7 +57,8 @@ export function ExecutionEngine({
   helperTextSection,
   preferences,
   onSavePreferences,
-  retryTrigger = 0
+  retryTrigger = 0,
+  onRetryConnection
 }: ExecutionEngineProps) {
   const [isActive, setIsActive] = useState(false);
   const [positionSize, setPositionSize] = useState<string>('1');
@@ -67,12 +69,27 @@ export function ExecutionEngine({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
   const [blacklistedInput, setBlacklistedInput] = useState<string>('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [activePrompt, setActivePrompt] = useState<any | null>(null);
 
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const currentTradeRef = useRef<SimulatedTrade | null>(null);
   const preferencesRef = useRef<UserPreferences>(preferences);
   const positionSizeRef = useRef<string>(positionSize);
   const hasLoggedStartRef = useRef<boolean>(false);
+  const stepRef = useRef<number>(step);
+  const isProcessingRef = useRef<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
+  const positionStepRef = useRef<number>(0);
+
+  useEffect(() => {
+    stepRef.current = step;
+  }, [step]);
+
+  const changeStep = (newStep: number) => {
+    stepRef.current = newStep;
+    setStep(newStep);
+  };
 
   // Add terminal log helper
   const addLog = useCallback((text: string, type: LogMessage['type'] = 'info', ticker?: string) => {
@@ -86,7 +103,7 @@ export function ExecutionEngine({
     setLogs((prev) => [...prev.slice(-49), newLog]); // Keep last 50 logs
   }, []);
 
-  const { balance, setBalance, connectionStatus, executeTrade } = useBrokerage(
+  const { balance, setBalance, connectionStatus, executeTrade, replyToIbkrPrompt } = useBrokerage(
     preferences,
     retryTrigger,
     addLog
@@ -127,7 +144,7 @@ export function ExecutionEngine({
           const trade = docSnap.data() as SimulatedTrade;
           currentTradeRef.current = trade;
           setCurrentTrade(trade);
-          setStep(3); // Resume at position tracking
+          changeStep(3); // Resume at position tracking
         }
       } catch (e) {
         console.warn('Failed to load active trade', e);
@@ -150,6 +167,105 @@ export function ExecutionEngine({
       } catch (e) {
         console.warn('Failed to save active trade to DB', e);
       }
+    }
+  };
+
+  const logTradeToDb = async (resolvedTrade: SimulatedTrade) => {
+    try {
+      await addDoc(collection(db, `users/${auth.currentUser?.uid}/trades`), {
+        userId: auth.currentUser?.uid,
+        ticker: resolvedTrade.ticker.toUpperCase(),
+        entryPrice: resolvedTrade.entryPrice,
+        exitPrice: resolvedTrade.exitPrice,
+        shares: resolvedTrade.shares,
+        strategy: `${resolvedTrade.setup} (Dry-Mode)`,
+        notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}.`,
+        pnl: resolvedTrade.pnl,
+        timestamp: serverTimestamp()
+      });
+      addLog(`[SYSTEM] Trade auto-logged to database history.`, 'success', resolvedTrade.ticker);
+    } catch (err: any) {
+      try {
+        handleFirestoreError(err, OperationType.CREATE, `users/${auth.currentUser?.uid}/trades`);
+      } catch (handledErr: any) {
+        let msg = "Database connection error.";
+        try {
+          const parsed = JSON.parse(handledErr.message);
+          msg = parsed.error || msg;
+        } catch {
+          msg = handledErr.message;
+        }
+        addLog(`[SYSTEM ERROR] Failed to log trade: ${msg}`, 'error', resolvedTrade.ticker);
+      }
+    }
+  };
+
+  const handleResolvePrompt = async (confirmed: boolean) => {
+    if (!activePrompt) return;
+    
+    const promptId = activePrompt.id;
+    const currentStep = stepRef.current;
+    const trade = currentTradeRef.current;
+    
+    if (!confirmed) {
+      addLog(`[SYSTEM] User declined broker warning. Cancelling order.`, 'warn', trade?.ticker);
+      try {
+        await replyToIbkrPrompt(promptId, false);
+      } catch (e) {
+        console.warn("Failed to send decline reply to IBKR:", e);
+      }
+      setActivePrompt(null);
+      setIsActive(false);
+      isPausedRef.current = false;
+      await updateCurrentTrade(null);
+      changeStep(0);
+      isProcessingRef.current = false;
+      return;
+    }
+
+    addLog(`[SYSTEM] Warning approved. Submitting reply...`, 'info', trade?.ticker);
+    try {
+      const res = await replyToIbkrPrompt(promptId, true);
+      
+      // Save messageIds to preferences
+      const currentApproved = preferencesRef.current.approvedIbkrWarnings || [];
+      const newIds = activePrompt.messageIds || [];
+      const updatedApproved = Array.from(new Set([...currentApproved, ...newIds]));
+      
+      await onSavePreferences({
+        ...preferencesRef.current,
+        approvedIbkrWarnings: updatedApproved
+      });
+      addLog(`[SYSTEM] Approved warnings whitelisted: ${JSON.stringify(newIds)}`, 'success', trade?.ticker);
+
+      if (res && res.requiresConfirmation) {
+        // Show the next prompt
+        setActivePrompt(res.prompts[0]);
+      } else {
+        // Successfully placed order!
+        setActivePrompt(null);
+        isPausedRef.current = false;
+        isProcessingRef.current = false;
+        
+        if (currentStep === 2) {
+          addLog(`[BROKER] LIVE BUY ORDER SUBMITTED (${preferencesRef.current.brokerage})`, 'success', trade?.ticker);
+          changeStep(3);
+        } else if (currentStep === 4) {
+          addLog(`[BROKER] LIVE SELL ORDER SUBMITTED (${preferencesRef.current.brokerage})`, 'success', trade?.ticker);
+          if (trade) {
+            await logTradeToDb(trade);
+          }
+          changeStep(5);
+        }
+      }
+    } catch (err: any) {
+      addLog(`[BROKER ERROR] Order reply failed: ${err.message}`, 'error', trade?.ticker);
+      setActivePrompt(null);
+      isPausedRef.current = false;
+      setIsActive(false);
+      await updateCurrentTrade(null);
+      changeStep(0);
+      isProcessingRef.current = false;
     }
   };
 
@@ -199,20 +315,14 @@ export function ExecutionEngine({
     }
 
     const runSimulationStep = async () => {
-      if (!auth.currentUser) return;
+      if (!auth.currentUser || isProcessingRef.current || isPausedRef.current) return;
+      isProcessingRef.current = true;
 
-      setStep((prevStep) => {
-        let nextStep = (prevStep + 1) % 6;
+      try {
+        const currentStep = stepRef.current;
         const activeTrade = currentTradeRef.current;
 
-        if (prevStep === 3) {
-          // 80% chance to hold position and track tape to simulate waiting for a trend
-          if (Math.random() < 0.80) {
-            nextStep = 3;
-          }
-        }
-
-        switch (nextStep) {
+        switch (currentStep) {
           case 0: // Scan & find setup
             {
               const currentPrefs = preferencesRef.current;
@@ -237,9 +347,29 @@ export function ExecutionEngine({
                 }
               }
 
-              const catalyst = CATALYSTS[Math.floor(Math.random() * CATALYSTS.length)];
+              addLog(`[SCANNER] Selected ticker: $${selectedItem.ticker}. Fetching live FMP quote & news...`, 'scan', selectedItem.ticker);
+
+              let liveData;
+              try {
+                const res = await fetch(`/api/stock/${selectedItem.ticker}/live-data`);
+                if (!res.ok) {
+                  const errData = await res.json();
+                  throw new Error(errData.error || res.statusText);
+                }
+                liveData = await res.json();
+              } catch (err: any) {
+                addLog(`[SYSTEM ERROR] Failed to fetch live data for $${selectedItem.ticker}: ${err.message}. Aborting trade scan.`, 'error', selectedItem.ticker);
+                setIsActive(false);
+                await updateCurrentTrade(null);
+                changeStep(0);
+                return;
+              }
+
+              const initialPrice = liveData.price;
+              const catalyst = liveData.catalyst;
+              const rvol = liveData.rvol;
+              const volume = liveData.volume;
               const setupType = Math.random() > 0.5 ? 'Bull Flag' : 'Flat Top Breakout';
-              const initialPrice = parseFloat((Math.random() * 15 + 2).toFixed(2));
               
               const spreadPercent = 0.008;
               const buyPrice = parseFloat((initialPrice * (1 + spreadPercent / 2)).toFixed(2));
@@ -268,10 +398,12 @@ export function ExecutionEngine({
                 stop: parseFloat((initialPrice * 0.96 * (1 - spreadPercent / 2)).toFixed(2))
               };
 
-              updateCurrentTrade(tempTrade);
+              await updateCurrentTrade(tempTrade);
               addLog(`[SCANNER] Hot ticker found: $${tempTrade.ticker} | Float: ${tempTrade.float}`, 'found', tempTrade.ticker);
-              addLog(`[CATALYST] Catalyst: ${tempTrade.catalyst} (RVOL > 4.5x)`, 'found', tempTrade.ticker);
+              addLog(`[CATALYST] News: "${tempTrade.catalyst}" (RVOL: ${rvol}x | Vol: ${volume.toLocaleString()})`, 'found', tempTrade.ticker);
               addLog(`[SETUP] Forming high-velocity 1-minute ${tempTrade.setup}. Range: $${sellPriceBase} (Bid) - $${buyPrice} (Ask)`, 'info', tempTrade.ticker);
+              
+              changeStep(1);
             }
             break;
 
@@ -279,6 +411,9 @@ export function ExecutionEngine({
             if (activeTrade) {
               addLog(`[LEVEL 2] Volume surging. Analyzing tape velocity... Bid support holding strong.`, 'info', activeTrade.ticker);
               addLog(`[TAPE] Heavy ask blocks at $${(activeTrade.entryPrice * 1.005).toFixed(2)} are being consumed rapidly.`, 'info', activeTrade.ticker);
+              changeStep(2);
+            } else {
+              changeStep(0);
             }
             break;
 
@@ -291,160 +426,216 @@ export function ExecutionEngine({
                 if (preferencesRef.current.brokerage === 'robinhood' && !preferencesRef.current.robinhoodToken) {
                   console.warn("Robinhood token missing, skipping broker trade execution");
                   addLog("Robinhood token missing, skipping broker trade execution", "warn", activeTrade.ticker);
+                  positionStepRef.current = 0;
+                  changeStep(3);
                 } else {
-                  executeTrade(activeTrade.ticker, activeTrade.shares, activeTrade.entryPrice, 'buy')
-                    .then(() => {
+                  try {
+                    const res = await executeTrade(
+                      activeTrade.ticker, 
+                      activeTrade.shares, 
+                      activeTrade.entryPrice, 
+                      'buy',
+                      activeTrade.target,
+                      activeTrade.stop
+                    );
+                    if (res && res.requiresConfirmation) {
+                      addLog(`[BROKER WARNING] Order requires confirmation: ${JSON.stringify(res.prompts[0].message)}`, 'warn', activeTrade.ticker);
+                      isPausedRef.current = true;
+                      setActivePrompt(res.prompts[0]);
+                    } else {
                       addLog(`[BROKER] LIVE BUY ORDER SUBMITTED (${preferencesRef.current.brokerage})`, 'success', activeTrade.ticker);
-                    })
-                    .catch((err) => {
-                      const isSymbolNotFound = err.message && (
-                        err.message.includes("Could not resolve Contract ID") ||
-                        err.message.includes("No symbol found") ||
-                        err.message.includes("symbol is valid") ||
-                        err.message.includes("Instrument not found")
-                      );
+                      positionStepRef.current = 0;
+                      changeStep(3);
+                    }
+                  } catch (err: any) {
+                    const isSymbolNotFound = err.message && (
+                      err.message.includes("Could not resolve Contract ID") ||
+                      err.message.includes("No symbol found") ||
+                      err.message.includes("symbol is valid") ||
+                      err.message.includes("Instrument not found")
+                    );
+                    
+                    if (isSymbolNotFound) {
+                      addLog(`[BROKER WARNING] Skipping symbol $${activeTrade.ticker} (not in broker / conid not found). Scanning for next setup...`, 'warn', activeTrade.ticker);
                       
-                      if (isSymbolNotFound) {
-                        addLog(`[BROKER WARNING] Skipping symbol $${activeTrade.ticker} (not in broker / conid not found). Scanning for next setup...`, 'warn', activeTrade.ticker);
-                        updateCurrentTrade(null);
-                        setStep(5);
-                      } else {
-                        addLog(`[BROKER ERROR] BUY FAILED: ${err.message}`, 'error', activeTrade.ticker);
-                        setIsActive(false);
-                        updateCurrentTrade(null);
-                        setStep(0);
+                      // Add symbol to blacklist
+                      const currentBlacklist = preferencesRef.current.blacklistedTickers || [];
+                      if (!currentBlacklist.includes(activeTrade.ticker)) {
+                        const updatedBlacklist = [...currentBlacklist, activeTrade.ticker];
+                        try {
+                          await onSavePreferences({
+                            ...preferencesRef.current,
+                            blacklistedTickers: updatedBlacklist
+                          });
+                          addLog(`[SYSTEM] Added $${activeTrade.ticker} to blacklist.`, 'info', activeTrade.ticker);
+                        } catch (e) {
+                          console.error("Failed to update blacklist:", e);
+                        }
                       }
-                    });
+
+                      await updateCurrentTrade(null);
+                      changeStep(5);
+                    } else {
+                      addLog(`[BROKER ERROR] BUY FAILED: ${err.message}`, 'error', activeTrade.ticker);
+                      setIsActive(false);
+                      await updateCurrentTrade(null);
+                      changeStep(0);
+                    }
+                  }
                 }
+              } else {
+                positionStepRef.current = 0;
+                changeStep(3);
               }
+            } else {
+              changeStep(0);
             }
             break;
 
           case 3: // Position tracking
             if (activeTrade) {
-              const rand = Math.random();
-              if (rand < 0.4) {
-                addLog(`[POSITION] $${activeTrade.ticker} pushing higher. Current mid: $${(activeTrade.entryPrice * 1.04).toFixed(2)}. Front-side holding 9 EMA.`, 'info', activeTrade.ticker);
-              } else if (rand < 0.7) {
-                addLog(`[POSITION] Consolidating sideways. Volume fading slightly, preparing for breakout attempt.`, 'info', activeTrade.ticker);
-              } else {
-                addLog(`[POSITION] Warning: Breakout stalled at resistance. Level 2 asks increasing.`, 'warn', activeTrade.ticker);
+              positionStepRef.current += 1;
+              
+              let liveData;
+              try {
+                const res = await fetch(`/api/stock/${activeTrade.ticker}/live-data`);
+                if (!res.ok) {
+                  const errData = await res.json();
+                  throw new Error(errData.error || res.statusText);
+                }
+                liveData = await res.json();
+              } catch (err: any) {
+                addLog(`[SYSTEM WARNING] Failed to fetch live tracking quote for $${activeTrade.ticker}: ${err.message}. Retrying on next tick...`, 'warn', activeTrade.ticker);
+                return;
               }
+
+              const currentPrice = liveData.price;
+              const pnl = (currentPrice - activeTrade.entryPrice) * activeTrade.shares;
+              const pnlPercent = ((currentPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
+              
+              addLog(`[POSITION] $${activeTrade.ticker} live price: $${currentPrice.toFixed(2)} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)`, 'info', activeTrade.ticker);
+
+              let exitPrice = currentPrice;
+              let description = '';
+              let logType: LogMessage['type'] = 'info';
+              let shouldResolve = false;
+
+              if (currentPrice >= activeTrade.target) {
+                exitPrice = activeTrade.target;
+                const finalPnlPercent = ((exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
+                description = `[PROFIT] Target Hit! $${activeTrade.ticker} reached profit limit. Sold at: $${exitPrice} (Bid). P&L: +${finalPnlPercent.toFixed(2)}%`;
+                logType = 'success';
+                shouldResolve = true;
+              } else if (currentPrice <= activeTrade.stop) {
+                exitPrice = activeTrade.stop;
+                const finalPnlPercent = ((exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
+                description = `[STOP LOSS] Stop loss hit! $${activeTrade.ticker} dropped below risk limit. Sold at: $${exitPrice} (Bid). P&L: ${finalPnlPercent.toFixed(2)}%`;
+                logType = 'fail';
+                shouldResolve = true;
+              } else if (positionStepRef.current >= 5) {
+                exitPrice = currentPrice;
+                const finalPnlPercent = ((exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
+                description = `[SCRATCH] Setup stalled (holding time limit reached). Sold at market price: $${exitPrice}. P&L: ${finalPnlPercent >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
+                logType = 'warn';
+                shouldResolve = true;
+              }
+
+              if (shouldResolve) {
+                const finalPnl = (exitPrice - activeTrade.entryPrice) * activeTrade.shares;
+                const resolvedTrade = {
+                  ...activeTrade,
+                  exitPrice: exitPrice,
+                  pnl: parseFloat(finalPnl.toFixed(2))
+                };
+                
+                addLog(description, logType, resolvedTrade.ticker);
+                await updateCurrentTrade(resolvedTrade);
+                changeStep(4);
+              }
+            } else {
+              changeStep(0);
             }
             break;
 
           case 4: // Position Resolution
             if (activeTrade) {
-              const outcomeRoll = Math.random();
-              let finalExit = activeTrade.entryPrice;
-              let finalPnl = 0;
-              let description = '';
-              let logType: LogMessage['type'] = 'info';
-
-              if (outcomeRoll < 0.45) {
-                finalExit = activeTrade.target;
-                finalPnl = (finalExit - activeTrade.entryPrice) * activeTrade.shares;
-                const finalPnlPercent = ((finalExit - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
-                description = `[PROFIT] Target Hit! $${activeTrade.ticker} erupted on high volume. Sold at low of range: $${finalExit} (Bid). P&L: +${finalPnlPercent.toFixed(2)}%`;
-                logType = 'success';
-              } else if (outcomeRoll < 0.75) {
-                const scratchSpread = (Math.random() * 0.04 - 0.02);
-                finalExit = parseFloat(((activeTrade.entryPrice + scratchSpread) * 0.992).toFixed(2));
-                finalPnl = (finalExit - activeTrade.entryPrice) * activeTrade.shares;
-                const finalPnlPercent = ((finalExit - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
-                description = `[SCRATCH] Breakout or Bail-out! Momentum stalled. Fast scratch sold at low of range: $${finalExit} (Bid). P&L: ${finalPnl >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
-                logType = 'warn';
-              } else {
-                finalExit = activeTrade.stop;
-                finalPnl = (finalExit - activeTrade.entryPrice) * activeTrade.shares;
-                const finalPnlPercent = ((finalExit - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
-                description = `[STOP LOSS] Back-side broke 9 EMA. Stop loss sold at low of range: $${finalExit} (Bid). P&L: ${finalPnlPercent.toFixed(2)}%`;
-                logType = 'fail';
-              }
-
-              const resolvedTrade = {
-                ...activeTrade,
-                exitPrice: finalExit,
-                pnl: parseFloat(finalPnl.toFixed(2))
-              };
-
-              updateCurrentTrade(resolvedTrade);
-              addLog(description, logType, resolvedTrade.ticker);
+              const resolvedTrade = activeTrade;
 
               if (!preferencesRef.current.brokerage || preferencesRef.current.brokerage === 'none') {
-                setBalance(prev => parseFloat((prev + finalPnl).toFixed(2)));
-              }
-
-              if (preferencesRef.current.brokerage && preferencesRef.current.brokerage !== 'none') {
-                if (preferencesRef.current.brokerage === 'robinhood' && !preferencesRef.current.robinhoodToken) {
+                setBalance(prev => parseFloat((prev + resolvedTrade.pnl).toFixed(2)));
+                await logTradeToDb(resolvedTrade);
+                changeStep(5);
+              } else {
+                if (preferencesRef.current.brokerage === 'interactivebrokers') {
+                  addLog(`[BROKER] Bracket order is active. Exit is managed on broker: Target $${resolvedTrade.target} / Stop $${resolvedTrade.stop}.`, 'info', resolvedTrade.ticker);
+                  await logTradeToDb(resolvedTrade);
+                  changeStep(5);
+                } else if (preferencesRef.current.brokerage === 'robinhood' && !preferencesRef.current.robinhoodToken) {
                   console.warn("Robinhood token missing, skipping broker trade execution");
                   addLog("Robinhood token missing, skipping broker trade execution", "warn", resolvedTrade.ticker);
+                  await logTradeToDb(resolvedTrade);
+                  changeStep(5);
                 } else {
-                  executeTrade(resolvedTrade.ticker, resolvedTrade.shares, resolvedTrade.exitPrice, 'sell')
-                    .then(() => {
-                      addLog(`[BROKER] LIVE SELL ORDER SUBMITTED (${preferencesRef.current.brokerage})`, 'success', resolvedTrade.ticker);
-                    })
-                    .catch((err) => {
-                      addLog(`[BROKER ERROR] SELL FAILED: ${err.message}`, 'error', resolvedTrade.ticker);
-                      setIsActive(false);
-                    });
-                }
-              }
-
-              const logToDb = async () => {
-                try {
-                  await addDoc(collection(db, `users/${auth.currentUser?.uid}/trades`), {
-                    userId: auth.currentUser?.uid,
-                    ticker: resolvedTrade.ticker.toUpperCase(),
-                    entryPrice: resolvedTrade.entryPrice,
-                    exitPrice: resolvedTrade.exitPrice,
-                    shares: resolvedTrade.shares,
-                    strategy: `${resolvedTrade.setup} (Dry-Mode)`,
-                    notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}.`,
-                    pnl: resolvedTrade.pnl,
-                    timestamp: serverTimestamp()
-                  });
-                  addLog(`[SYSTEM] Trade auto-logged to database history.`, 'success', resolvedTrade.ticker);
-                } catch (err: any) {
                   try {
-                    handleFirestoreError(err, OperationType.CREATE, `users/${auth.currentUser?.uid}/trades`);
-                  } catch (handledErr: any) {
-                    let msg = "Database connection error.";
-                    try {
-                      const parsed = JSON.parse(handledErr.message);
-                      msg = parsed.error || msg;
-                    } catch {
-                      msg = handledErr.message;
+                    const res = await executeTrade(resolvedTrade.ticker, resolvedTrade.shares, resolvedTrade.exitPrice, 'sell');
+                    if (res && res.requiresConfirmation) {
+                      addLog(`[BROKER WARNING] Order requires confirmation: ${JSON.stringify(res.prompts[0].message)}`, 'warn', resolvedTrade.ticker);
+                      isPausedRef.current = true;
+                      setActivePrompt(res.prompts[0]);
+                    } else {
+                      addLog(`[BROKER] LIVE SELL ORDER SUBMITTED (${preferencesRef.current.brokerage})`, 'success', resolvedTrade.ticker);
+                      await logTradeToDb(resolvedTrade);
+                      changeStep(5);
                     }
-                    addLog(`[SYSTEM ERROR] Failed to log trade: ${msg}`, 'error', resolvedTrade.ticker);
+                  } catch (err: any) {
+                    addLog(`[BROKER ERROR] SELL FAILED: ${err.message}`, 'error', resolvedTrade.ticker);
+                    setIsActive(false);
+                    await updateCurrentTrade(null);
+                    changeStep(0);
                   }
                 }
-              };
-
-              logToDb();
+              }
+            } else {
+              changeStep(0);
             }
             break;
 
           case 5: // Post-trade wait
             addLog(`Scanning market for next setup...`, 'scan');
-            updateCurrentTrade(null);
+            await updateCurrentTrade(null);
+            changeStep(0);
             break;
         }
-
-        return nextStep;
-      });
+      } finally {
+        isProcessingRef.current = false;
+      }
     };
-
-    runSimulationStep();
 
     const timer = setInterval(runSimulationStep, speed);
     return () => clearInterval(timer);
-  }, [isActive, speed, addLog, executeTrade, setBalance]);
+  }, [isActive, speed, addLog, executeTrade, setBalance, onSavePreferences]);
+
+  useEffect(() => {
+    if (isConnecting) {
+      if (connectionStatus === 'success') {
+        setIsConnecting(false);
+        setIsActive(true);
+        addLog('[SYSTEM] Broker reconnection successful. Ross Cameron momentum engine starting...', 'success');
+      } else if (connectionStatus === 'failed') {
+        setIsConnecting(false);
+        addLog('[SYSTEM ERROR] Broker reconnection failed. Please check your Gateway or settings and try again.', 'error');
+      }
+    }
+  }, [connectionStatus, isConnecting, addLog]);
 
   const handleToggleActive = () => {
     if (!isActive) {
       if (preferences.brokerage && preferences.brokerage !== 'none' && connectionStatus === 'failed') {
-        addLog('[SYSTEM ERROR] Cannot start engine: Broker connection is offline. Please check your settings.', 'error');
+        addLog('[SYSTEM] Attempting to reconnect to broker...', 'info');
+        setIsConnecting(true);
+        if (onRetryConnection) {
+          onRetryConnection();
+        }
         return;
       }
     }
@@ -467,6 +658,7 @@ export function ExecutionEngine({
           preferences={preferences}
           connectionStatus={connectionStatus}
           balance={balance}
+          isConnecting={isConnecting}
         />
 
         <FilterSettings
@@ -492,6 +684,51 @@ export function ExecutionEngine({
       />
 
       {helperTextSection}
+
+      {activePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl animate-fade-in">
+            <div className="flex items-center gap-3 border-b border-zinc-900 pb-4 mb-4">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10 text-amber-500 animate-pulse">
+                <Info className="h-5 w-5" />
+              </span>
+              <div>
+                <h3 className="text-base font-bold text-zinc-100 font-sans">IBKR Order Confirmation Required</h3>
+                <p className="text-xs text-zinc-500 font-mono">ID: {activePrompt.id}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              {activePrompt.message?.map((msg: string, idx: number) => {
+                const cleanMsg = msg.replace(/<\/?[^>]+(>|$)/g, "");
+                return (
+                  <p key={idx} className="text-sm leading-relaxed text-zinc-300 font-mono whitespace-pre-line bg-zinc-900/40 p-3 rounded-lg border border-zinc-900/80">
+                    {cleanMsg}
+                  </p>
+                );
+              })}
+              <p className="text-[10px] text-zinc-500 italic font-sans leading-normal">
+                Selecting "Yes, Approve & Submit" will whitelist this prompt's warning identifier ("{activePrompt.messageIds?.join(', ')}") and automatically bypass it in future trades.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-zinc-900 pt-4 font-sans">
+              <button
+                onClick={() => handleResolvePrompt(false)}
+                className="px-4 py-2 text-xs font-semibold text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-800 rounded-lg border border-zinc-800 transition-colors"
+              >
+                No, Cancel Order
+              </button>
+              <button
+                onClick={() => handleResolvePrompt(true)}
+                className="px-4 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-500 active:bg-amber-700 rounded-lg shadow-lg hover:shadow-amber-600/10 transition-all"
+              >
+                Yes, Approve & Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -64,6 +64,7 @@ export interface UserPreferences {
   trackedTickers?: string[];
   blacklistedTickers?: string[];
   positionSize?: string;
+  approvedIbkrWarnings?: string[];
 }
 
 export interface LowFloatTicker {

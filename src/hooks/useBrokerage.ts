@@ -129,7 +129,14 @@ export function useBrokerage(
     };
   }, [preferences, retryTrigger]);
 
-  const executeTrade = async (ticker: string, shares: number, price: number, side: 'buy' | 'sell') => {
+  const executeTrade = async (
+    ticker: string, 
+    shares: number, 
+    price: number, 
+    side: 'buy' | 'sell',
+    target?: number,
+    stop?: number
+  ) => {
     if (!preferences.brokerage || preferences.brokerage === 'none') {
       return { success: true, simulated: true };
     }
@@ -140,14 +147,39 @@ export function useBrokerage(
         'Content-Type': 'application/json',
         'x-robinhood-token': preferences.robinhoodToken || '',
         'x-lightspeed-key': preferences.lightspeedKey || '',
-        'x-ibkr-url': preferences.ibkrUrl || ''
+        'x-ibkr-url': preferences.ibkrUrl || '',
+        'x-approved-ibkr-warnings': (preferences.approvedIbkrWarnings || []).join(',')
       },
       body: JSON.stringify({
         brokerage: preferences.brokerage,
         ticker: ticker.toUpperCase(),
         shares,
         price,
-        side
+        side,
+        target,
+        stop
+      })
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json();
+      throw new Error(errorData.error || res.statusText);
+    }
+
+    return await res.json();
+  };
+
+  const replyToIbkrPrompt = async (promptId: string, confirmed: boolean) => {
+    const res = await fetch('/api/broker/ibkr/reply', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-ibkr-url': preferences.ibkrUrl || '',
+        'x-approved-ibkr-warnings': (preferences.approvedIbkrWarnings || []).join(',')
+      },
+      body: JSON.stringify({
+        promptId,
+        confirmed
       })
     });
 
@@ -197,6 +229,7 @@ export function useBrokerage(
     rhMessage,
     setRhMessage,
     executeTrade,
+    replyToIbkrPrompt,
     validateRobinhood
   };
 }

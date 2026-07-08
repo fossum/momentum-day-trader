@@ -356,6 +356,7 @@ export function Dashboard() {
               preferences={preferences}
               onSavePreferences={(newPrefs) => savePreferences(newPrefs, false)}
               retryTrigger={retryTrigger}
+              onRetryConnection={() => setRetryTrigger(prev => prev + 1)}
               topGainersSection={
                 <MarketScanner
                   gainers={gainers}

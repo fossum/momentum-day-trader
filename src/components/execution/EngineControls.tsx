@@ -13,6 +13,7 @@ interface EngineControlsProps {
   preferences: UserPreferences;
   connectionStatus: 'success' | 'failed' | 'none';
   balance: number;
+  isConnecting?: boolean;
 }
 
 export function EngineControls({
@@ -25,7 +26,8 @@ export function EngineControls({
   onChangeSpeed,
   preferences,
   connectionStatus,
-  balance
+  balance,
+  isConnecting = false
 }: EngineControlsProps) {
   const getBrokerageLabel = (brokerage?: string) => {
     if (brokerage === 'robinhood') return 'Robinhood';
@@ -76,9 +78,12 @@ export function EngineControls({
       
       <button
         onClick={onToggleActive}
+        disabled={isConnecting}
         className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all shadow-md focus:outline-none ${
           isActive 
             ? 'bg-rose-600 hover:bg-rose-500 text-white' 
+            : isConnecting
+            ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700'
             : 'bg-emerald-600 hover:bg-emerald-500 text-white'
         }`}
       >
@@ -86,6 +91,11 @@ export function EngineControls({
           <>
             <Square className="h-4 w-4 fill-current" />
             Stop Engine
+          </>
+        ) : isConnecting ? (
+          <>
+            <Activity className="h-4 w-4 animate-spin text-zinc-500" />
+            Connecting...
           </>
         ) : (
           <>
