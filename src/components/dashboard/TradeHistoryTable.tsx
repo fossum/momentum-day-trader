@@ -77,20 +77,57 @@ export function TradeHistoryTable({
           </div>
         </div>
 
-        {/* Clear History Trigger */}
-        <div className="flex items-center justify-end">
+        {/* Actions Trigger */}
+        <div className="flex items-center justify-end gap-2">
           {trades.length > 0 && (
-            <button
-              onClick={onClearHistory}
-              className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer focus:outline-none ${
-                confirmClear 
-                  ? 'border-red-500 bg-red-500 text-white hover:bg-red-600 animate-pulse'
-                  : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-400'
-              }`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              {confirmClear ? 'Click Again to Clear ALL' : 'Reset History'}
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  const csvRows = [];
+                  const headers = ['Date', 'Ticker', 'Strategy', 'Notes', 'Shares', 'Entry Price', 'Exit Price', 'Return %'];
+                  csvRows.push(headers.join(','));
+
+                  for (const trade of filteredTrades) {
+                    const row = [
+                      format(new Date(trade.timestamp), 'yyyy-MM-dd HH:mm:ss'),
+                      trade.ticker,
+                      `"${trade.strategy || ''}"`,
+                      `"${trade.notes ? trade.notes.replace(/"/g, '""') : ''}"`,
+                      trade.shares,
+                      trade.entryPrice,
+                      trade.exitPrice,
+                      calculateTradePnlPercent(trade).toFixed(2)
+                    ];
+                    csvRows.push(row.join(','));
+                  }
+
+                  const csvString = csvRows.join('\n');
+                  const blob = new Blob([csvString], { type: 'text/csv' });
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.setAttribute('hidden', '');
+                  a.setAttribute('href', url);
+                  a.setAttribute('download', `trade_history_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }}
+                className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition-all hover:bg-zinc-700 hover:text-white cursor-pointer focus:outline-none"
+              >
+                Export CSV
+              </button>
+              <button
+                onClick={onClearHistory}
+                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer focus:outline-none ${
+                  confirmClear
+                    ? 'border-red-500 bg-red-500 text-white hover:bg-red-600 animate-pulse'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-400'
+                }`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {confirmClear ? 'Click Again to Clear ALL' : 'Reset History'}
+              </button>
+            </>
           )}
         </div>
       </div>

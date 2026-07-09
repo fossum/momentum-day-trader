@@ -67,6 +67,14 @@ export interface UserPreferences {
   approvedIbkrWarnings?: string[];
   extendedTradingHours?: boolean;
   geminiSentimentFilter?: boolean;
+  minPrice?: number;
+  maxPrice?: number;
+  minGainPercent?: number;
+  minRvol?: number;
+  maxFloatMillions?: number;
+  maxStopDistance?: number;
+  minRewardRiskRatio?: number;
+  simulationSpeed?: number;
 }
 
 export interface LowFloatTicker {
