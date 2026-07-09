@@ -17,7 +17,7 @@ function logUserDecision(userId: string | undefined, message: string, level: str
 
   // Security Fix: Validate userId to prevent path traversal vulnerabilities
   if (!/^[a-zA-Z0-9_-]+$/.test(userId)) {
-    console.warn(`Invalid userId format detected: ${userId}`);
+    console.warn(`Invalid userId format detected: ${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
     return;
   }
 
