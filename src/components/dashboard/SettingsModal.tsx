@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserPreferences } from '../../types';
-import { X, Check } from 'lucide-react';
+import { X, Check, RefreshCw } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -35,6 +35,20 @@ export function SettingsModal({
 }: SettingsModalProps) {
   if (!isOpen) return null;
 
+  const handleResetStrategy = () => {
+    setPreferences({
+      ...preferences,
+      minPrice: 2.0,
+      maxPrice: 20.0,
+      minGainPercent: 10,
+      minRvol: 5.0,
+      maxFloatMillions: 20,
+      maxStopDistance: 0.20,
+      minRewardRiskRatio: 2.0,
+      simulationSpeed: 6000
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-950 p-6 shadow-xl relative animate-fadeIn">
@@ -46,9 +60,115 @@ export function SettingsModal({
         </button>
         <h2 className="mb-6 text-xl font-bold text-zinc-100">Settings</h2>
         
-        <div className="space-y-6">
+        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-3">
+              Strategy & Engine Tweaks
+            </label>
+            <div className="space-y-4 mb-6 p-4 rounded-lg border border-zinc-800 bg-zinc-900/50">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-zinc-400">Configure core momentum filters and risk</span>
+                <button
+                  onClick={handleResetStrategy}
+                  className="flex items-center gap-1 text-[10px] text-emerald-500 hover:text-emerald-400"
+                  type="button"
+                >
+                  <RefreshCw className="h-3 w-3" /> Reset Defaults
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min Price ($)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={preferences.minPrice ?? 2.0}
+                    onChange={(e) => setPreferences({ ...preferences, minPrice: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Price ($)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={preferences.maxPrice ?? 20.0}
+                    onChange={(e) => setPreferences({ ...preferences, maxPrice: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min Daily Gain (%)</label>
+                  <input
+                    type="number"
+                    value={preferences.minGainPercent ?? 10}
+                    onChange={(e) => setPreferences({ ...preferences, minGainPercent: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min RVOL (x)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={preferences.minRvol ?? 5.0}
+                    onChange={(e) => setPreferences({ ...preferences, minRvol: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Float (M)</label>
+                  <input
+                    type="number"
+                    value={preferences.maxFloatMillions ?? 20}
+                    onChange={(e) => setPreferences({ ...preferences, maxFloatMillions: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Stop Dist ($)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={preferences.maxStopDistance ?? 0.20}
+                    onChange={(e) => setPreferences({ ...preferences, maxStopDistance: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min R:R Ratio</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={preferences.minRewardRiskRatio ?? 2.0}
+                    onChange={(e) => setPreferences({ ...preferences, minRewardRiskRatio: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Engine Speed (ms)</label>
+                  <input
+                    type="number"
+                    step="1000"
+                    value={preferences.simulationSpeed ?? 6000}
+                    onChange={(e) => setPreferences({ ...preferences, simulationSpeed: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <label className="block text-sm font-medium text-zinc-300 mb-3 mt-4">
               Brokerage Connection
             </label>
             <div className="space-y-3">

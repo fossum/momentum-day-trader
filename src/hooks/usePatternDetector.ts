@@ -64,8 +64,8 @@ export const CATALYST_KEYWORDS = [
   'Guidance'
 ];
 
-export const MAX_STOP_DISTANCE = 0.20;
-export const MIN_REWARD_RISK_RATIO = 2.0;
+export const MAX_STOP_DISTANCE_DEFAULT = 0.20;
+export const MIN_REWARD_RISK_RATIO_DEFAULT = 2.0;
 
 // ---------- EMA ----------
 
@@ -194,41 +194,46 @@ export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
 // ---------- Risk Management ----------
 
 /**
- * Validate the stop distance is within the $0.20 maximum.
+ * Validate the stop distance is within the maximum.
  * Returns true if the trade is acceptable, false if the stop is too wide.
  */
-export function validateStopDistance(entryPrice: number, pullbackLow: number): boolean {
+export function validateStopDistance(
+  entryPrice: number,
+  pullbackLow: number,
+  maxStopDistance: number = MAX_STOP_DISTANCE_DEFAULT
+): boolean {
   const stopDistance = Number((entryPrice - pullbackLow).toFixed(2));
-  return stopDistance > 0 && stopDistance <= MAX_STOP_DISTANCE;
+  return stopDistance > 0 && stopDistance <= maxStopDistance;
 }
 
 /**
- * Calculate the profit target ensuring a minimum 2:1 reward:risk ratio.
- * The target is set at the resistance breakout level if it provides >= 2:1 R:R.
- * If not, the target is calculated as entry + 2 * stopDistance.
+ * Calculate the profit target ensuring a minimum reward:risk ratio.
+ * The target is set at the resistance breakout level if it provides >= min R:R.
+ * If not, the target is calculated based on the required R:R.
  *
  * Returns the target price and actual R:R ratio, or null if the setup is invalid.
  */
 export function calculateTarget(
   entryPrice: number,
   stopPrice: number,
-  resistanceLevel?: number
+  resistanceLevel?: number,
+  minRewardRiskRatio: number = MIN_REWARD_RISK_RATIO_DEFAULT
 ): { targetPrice: number; ratio: number } | null {
   const stopDistance = entryPrice - stopPrice;
   if (stopDistance <= 0) return null;
 
-  const minTarget = entryPrice + stopDistance * MIN_REWARD_RISK_RATIO;
+  const minTarget = entryPrice + stopDistance * minRewardRiskRatio;
 
-  // If resistance level provides at least 2:1, use it
+  // If resistance level provides at least required R:R, use it
   if (resistanceLevel !== undefined && resistanceLevel >= minTarget) {
     const ratio = (resistanceLevel - entryPrice) / stopDistance;
     return { targetPrice: resistanceLevel, ratio: parseFloat(ratio.toFixed(2)) };
   }
 
-  // Otherwise, use the calculated minimum target (exactly 2:1)
+  // Otherwise, use the calculated minimum target
   return {
     targetPrice: parseFloat(minTarget.toFixed(2)),
-    ratio: MIN_REWARD_RISK_RATIO
+    ratio: minRewardRiskRatio
   };
 }
 
@@ -258,28 +263,36 @@ export function validateCatalyst(headline: string): CatalystResult {
 
 /**
  * Check if a gainer passes the Ross Cameron baseline criteria.
- * - Price: $2.00 to $20.00
- * - Daily Gain: >= 10%
+ * Default: Price $2.00 to $20.00, Daily Gain >= 10%
  */
 export function passesBaselineFilter(
   price: number,
-  changePercent: number
+  changePercent: number,
+  minPrice: number = 2.0,
+  maxPrice: number = 20.0,
+  minGainPercent: number = 10
 ): boolean {
-  return price >= 2.0 && price <= 20.0 && changePercent >= 10;
+  return price >= minPrice && price <= maxPrice && changePercent >= minGainPercent;
 }
 
 /**
- * Check if RVOL meets the 5x minimum threshold.
+ * Check if RVOL meets the minimum threshold (Default: 5x).
  */
-export function passesRvolFilter(rvol: number): boolean {
-  return rvol >= 5.0;
+export function passesRvolFilter(
+  rvol: number,
+  minRvol: number = 5.0
+): boolean {
+  return rvol >= minRvol;
 }
 
 /**
- * Check if the float (using shares outstanding as proxy) is under 20M.
+ * Check if the float (using shares outstanding as proxy) is under the maximum (Default: 20M).
  */
-export function passesFloatFilter(sharesOutstanding: number): boolean {
-  return sharesOutstanding > 0 && sharesOutstanding <= 20000000;
+export function passesFloatFilter(
+  sharesOutstanding: number,
+  maxFloatMillions: number = 20
+): boolean {
+  return sharesOutstanding > 0 && sharesOutstanding <= (maxFloatMillions * 1000000);
 }
 
 // ---------- Trading Window ----------

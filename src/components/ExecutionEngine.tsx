@@ -43,7 +43,7 @@ export function ExecutionEngine({
 }: ExecutionEngineProps) {
   const [isActive, setIsActive] = useState(false);
   const [positionSize, setPositionSize] = useState<string>('1');
-  const [speed, setSpeed] = useState<number>(6000); // ms per state transition
+  const [speed, setSpeed] = useState<number>(preferences.simulationSpeed || 6000); // ms per state transition
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [currentTrade, setCurrentTrade] = useState<SimulatedTrade | null>(null);
   const [step, setStep] = useState<number>(0);
@@ -117,7 +117,10 @@ export function ExecutionEngine({
     if (preferences.positionSize) {
       setPositionSize(preferences.positionSize);
     }
-  }, [preferences.positionSize]);
+    if (preferences.simulationSpeed) {
+      setSpeed(preferences.simulationSpeed);
+    }
+  }, [preferences.positionSize, preferences.simulationSpeed]);
 
   useEffect(() => {
     setBlacklistedInput((preferences.blacklistedTickers || []).join(', '));
@@ -169,7 +172,7 @@ export function ExecutionEngine({
         exitPrice: resolvedTrade.exitPrice,
         shares: resolvedTrade.shares,
         strategy: `${resolvedTrade.setup} (Dry-Mode)`,
-        notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}.`,
+        notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}. Stop Distance: $${(resolvedTrade.entryPrice - resolvedTrade.stop).toFixed(2)}. R:R: ${((resolvedTrade.target - resolvedTrade.entryPrice)/(resolvedTrade.entryPrice - resolvedTrade.stop)).toFixed(2)}.`,
         pnl: resolvedTrade.pnl,
         timestamp: serverTimestamp()
       });
@@ -330,6 +333,13 @@ export function ExecutionEngine({
 
               const blacklist = preferencesRef.current.blacklistedTickers || [];
 
+              // Configuration limits
+              const minPrice = preferencesRef.current.minPrice ?? 2.0;
+              const maxPrice = preferencesRef.current.maxPrice ?? 20.0;
+              const minGainPercent = preferencesRef.current.minGainPercent ?? 10;
+              const minRvol = preferencesRef.current.minRvol ?? 5.0;
+              const maxFloatMillions = preferencesRef.current.maxFloatMillions ?? 20;
+
               // Find the next gainer that passes baseline filters
               let selectedGainer: MarketGainer | null = null;
               const startIdx = lastGainerIndexRef.current;
@@ -342,7 +352,7 @@ export function ExecutionEngine({
                   continue;
                 }
 
-                if (!passesBaselineFilter(g.price, g.changesPercentage)) {
+                if (!passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)) {
                   continue;
                 }
 
@@ -352,7 +362,7 @@ export function ExecutionEngine({
               }
 
               if (!selectedGainer) {
-                addLog('[SCANNER] No live gainers pass baseline filters (price $2–$20, gain ≥ 10%). Waiting...', 'scan');
+                addLog(`[SCANNER] No live gainers pass baseline filters (price $${minPrice}–$${maxPrice}, gain ≥ ${minGainPercent}%). Waiting...`, 'scan');
                 return;
               }
 
@@ -379,15 +389,15 @@ export function ExecutionEngine({
               }
 
               // RVOL check
-              if (!passesRvolFilter(liveData.rvol)) {
-                addLog(`[SCANNER] $${selectedGainer.symbol} RVOL ${liveData.rvol}x < 5x threshold. Skipping.`, 'scan', selectedGainer.symbol);
+              if (!passesRvolFilter(liveData.rvol, minRvol)) {
+                addLog(`[SCANNER] $${selectedGainer.symbol} RVOL ${liveData.rvol}x < ${minRvol}x threshold. Skipping.`, 'scan', selectedGainer.symbol);
                 return;
               }
 
               // Float check
-              if (!passesFloatFilter(liveData.sharesOutstanding)) {
+              if (!passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions)) {
                 const floatInM = (liveData.sharesOutstanding / 1000000).toFixed(1);
-                addLog(`[SCANNER] $${selectedGainer.symbol} float ${floatInM}M exceeds 20M maximum. Skipping.`, 'scan', selectedGainer.symbol);
+                addLog(`[SCANNER] $${selectedGainer.symbol} float ${floatInM}M exceeds ${maxFloatMillions}M maximum. Skipping.`, 'scan', selectedGainer.symbol);
                 return;
               }
 
@@ -497,18 +507,22 @@ export function ExecutionEngine({
 
               addLog(`[PATTERN] ✓ Bull Flag detected for $${activeTrade.ticker}! Resistance: $${pattern.resistanceLevel.toFixed(2)} | Pullback Low: $${pattern.pullbackLow.toFixed(2)}`, 'found', activeTrade.ticker);
 
+              // Configuration limits
+              const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
+              const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
+
               // Risk management: validate stop distance
               const entryPrice = pattern.resistanceLevel; // Entry at breakout above resistance
-              if (!validateStopDistance(entryPrice, pattern.pullbackLow)) {
+              if (!validateStopDistance(entryPrice, pattern.pullbackLow, maxStopDistance)) {
                 const stopDist = (entryPrice - pattern.pullbackLow).toFixed(2);
-                addLog(`[RISK] $${activeTrade.ticker} stop distance $${stopDist} exceeds $0.20 max. Skipping trade.`, 'warn', activeTrade.ticker);
+                addLog(`[RISK] $${activeTrade.ticker} stop distance $${stopDist} exceeds $${maxStopDistance.toFixed(2)} max. Skipping trade.`, 'warn', activeTrade.ticker);
                 await updateCurrentTrade(null);
                 changeStep(0);
                 return;
               }
 
-              // Calculate target with 2:1 R:R minimum
-              const targetResult = calculateTarget(entryPrice, pattern.pullbackLow);
+              // Calculate target with configured R:R minimum
+              const targetResult = calculateTarget(entryPrice, pattern.pullbackLow, undefined, minRewardRiskRatio);
               if (!targetResult) {
                 addLog(`[RISK] $${activeTrade.ticker} invalid risk:reward setup. Skipping.`, 'warn', activeTrade.ticker);
                 await updateCurrentTrade(null);
