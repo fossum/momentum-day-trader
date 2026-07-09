@@ -14,6 +14,13 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 // Local logging helper for user decisions
 function logUserDecision(userId: string | undefined, message: string, level: string = "INFO") {
   if (!userId) return;
+
+  // Security Fix: Validate userId to prevent path traversal vulnerabilities
+  if (!/^[a-zA-Z0-9_-]+$/.test(userId)) {
+    console.warn(`Invalid userId format detected: ${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+    return;
+  }
+
   try {
     const logsDir = path.join(process.cwd(), "logs");
     if (!fs.existsSync(logsDir)) {
