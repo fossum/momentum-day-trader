@@ -66,7 +66,15 @@ export interface UserPreferences {
   positionSize?: string;
   approvedIbkrWarnings?: string[];
   extendedTradingHours?: boolean;
-  geminiSentimentFilter?: boolean;
+  catalystValidation?: 'gemini' | 'keywords' | 'bypassed';
+  checkPriceRange?: boolean;
+  checkDailyGain?: boolean;
+  checkRelativeVol?: boolean;
+  checkSharesFloat?: boolean;
+  checkTradingWindow?: boolean;
+  checkBullFlagPattern?: boolean;
+  checkStopDistance?: boolean;
+  checkRiskReward?: boolean;
   minPrice?: number;
   maxPrice?: number;
   minGainPercent?: number;

@@ -45,7 +45,16 @@ export function SettingsModal({
       maxFloatMillions: 20,
       maxStopDistance: 0.20,
       minRewardRiskRatio: 2.0,
-      simulationSpeed: 6000
+      simulationSpeed: 6000,
+      catalystValidation: 'gemini',
+      checkPriceRange: true,
+      checkDailyGain: true,
+      checkRelativeVol: true,
+      checkSharesFloat: true,
+      checkTradingWindow: true,
+      checkBullFlagPattern: true,
+      checkStopDistance: true,
+      checkRiskReward: true
     });
   };
 
@@ -164,6 +173,133 @@ export function SettingsModal({
                     onChange={(e) => setPreferences({ ...preferences, simulationSpeed: parseInt(e.target.value) || 6000 })}
                     className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
                   />
+                </div>
+              </div>
+            </div>
+
+            <label className="block text-sm font-medium text-zinc-300 mb-3 mt-4">
+              Entrance Checklist Filters
+            </label>
+            <div className="space-y-4 mb-6 p-4 rounded-lg border border-zinc-800 bg-zinc-900/50">
+              <span className="text-[10px] text-zinc-400 block mb-1">Enable or disable checks in the buy entrance evaluation:</span>
+              <div className="grid grid-cols-2 gap-3 pb-3 border-b border-zinc-800/40">
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkPriceRange ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkPriceRange: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>1. Price Range</span>
+                </label>
+                
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkDailyGain ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkDailyGain: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>2. Daily Gain</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkRelativeVol ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkRelativeVol: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>3. Relative Vol</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkSharesFloat ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkSharesFloat: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>4. Shares Float</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkTradingWindow ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkTradingWindow: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>5. Trading Window</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkBullFlagPattern ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkBullFlagPattern: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>6. Bull Flag Pattern</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkStopDistance ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkStopDistance: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>7. Stop Distance</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={preferences.checkRiskReward ?? true}
+                    onChange={(e) => setPreferences({ ...preferences, checkRiskReward: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+                  />
+                  <span>8. Risk/Reward</span>
+                </label>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="block text-xs font-semibold text-zinc-400">9. Catalyst &amp; News Validation</label>
+                <div className="flex flex-col gap-2 bg-zinc-950/40 p-2.5 rounded border border-zinc-800/40" onClick={(e) => e.stopPropagation()}>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                    <input
+                      type="radio"
+                      name="catalystValidation"
+                      value="gemini"
+                      checked={(preferences.catalystValidation ?? 'gemini') === 'gemini'}
+                      onChange={() => setPreferences({ ...preferences, catalystValidation: 'gemini' })}
+                      className="h-4 w-4 border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                    />
+                    <span>Gemini Sentiment (Requires keyword match first)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                    <input
+                      type="radio"
+                      name="catalystValidation"
+                      value="keywords"
+                      checked={preferences.catalystValidation === 'keywords'}
+                      onChange={() => setPreferences({ ...preferences, catalystValidation: 'keywords' })}
+                      className="h-4 w-4 border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                    />
+                    <span>Keywords Only</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
+                    <input
+                      type="radio"
+                      name="catalystValidation"
+                      value="bypassed"
+                      checked={preferences.catalystValidation === 'bypassed'}
+                      onChange={() => setPreferences({ ...preferences, catalystValidation: 'bypassed' })}
+                      className="h-4 w-4 border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+                    />
+                    <span>Bypassed (Technical Breakout Only)</span>
+                  </label>
                 </div>
               </div>
             </div>

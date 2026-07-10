@@ -39,7 +39,15 @@ export function Dashboard() {
     markets: ['NASDAQ', 'NYSE', 'OTC', 'Warrants', 'Foreign'], 
     robinhoodOnly: true, 
     brokerage: 'none',
-    geminiSentimentFilter: true
+    catalystValidation: 'gemini',
+    checkPriceRange: true,
+    checkDailyGain: true,
+    checkRelativeVol: true,
+    checkSharesFloat: true,
+    checkTradingWindow: true,
+    checkBullFlagPattern: true,
+    checkStopDistance: true,
+    checkRiskReward: true
   });
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [retryTrigger, setRetryTrigger] = useState(0);

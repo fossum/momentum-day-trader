@@ -84,33 +84,52 @@ async function startServer() {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const response = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`);
-      if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
-      const data = await response.json();
+
+      const [quoteRes, floatRes, profileRes] = await Promise.allSettled([
+        fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`),
+        fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`),
+        fetch(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`)
+      ]);
+
+      if (quoteRes.status !== 'fulfilled' || !quoteRes.value.ok) {
+        throw new Error(`FMP quote fetch failed with status ${quoteRes.status === 'fulfilled' ? quoteRes.value.status : 'rejected'}`);
+      }
+      const data = await quoteRes.value.json();
       
-      // Fetch shares float as well
       let floatShares = 0;
       let outstandingShares = 0;
-      try {
-        const floatRes = await fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`);
-        if (floatRes.ok) {
-          const floatData = await floatRes.json();
+      if (floatRes.status === 'fulfilled' && floatRes.value.ok) {
+        try {
+          const floatData = await floatRes.value.json();
           if (Array.isArray(floatData) && floatData.length > 0) {
             floatShares = floatData[0].floatShares || 0;
             outstandingShares = floatData[0].outstandingShares || 0;
           }
+        } catch (e: any) {
+          console.warn(`FMP shares-float parsing failed for ${ticker}:`, e.message);
         }
-      } catch (e: any) {
-        console.warn(`FMP shares-float fetch failed for ${ticker}:`, e.message);
       }
 
-      // Ensure changesPercentage and sharesOutstanding are populated for frontend compatibility
+      let avgVolume = 0;
+      if (profileRes.status === 'fulfilled' && profileRes.value.ok) {
+        try {
+          const profileData = await profileRes.value.json();
+          if (Array.isArray(profileData) && profileData.length > 0) {
+            avgVolume = profileData[0].averageVolume || 0;
+          }
+        } catch (e: any) {
+          console.warn(`FMP profile parsing failed for ${ticker}:`, e.message);
+        }
+      }
+
+      // Ensure changesPercentage, sharesOutstanding, and avgVolume are populated for frontend compatibility
       const mappedData = data.map((item: any) => {
         const finalFloat = floatShares || outstandingShares || item.sharesOutstanding || 0;
         return {
           ...item,
           changesPercentage: item.changesPercentage !== undefined ? item.changesPercentage : item.changePercentage,
-          sharesOutstanding: finalFloat
+          sharesOutstanding: finalFloat,
+          avgVolume: avgVolume || item.avgVolume || 0
         };
       });
       
@@ -210,44 +229,48 @@ async function startServer() {
         }
       }
 
-      // Fetch FMP news and quote as fallback / supplemental data
+      // Fetch FMP news, quote, float and profile as fallback / supplemental data
       let quote: any = null;
       let newsData: any[] = [];
       let floatShares = 0;
       let outstandingShares = 0;
+      let profileAvgVolume = 0;
       
       try {
-        const quoteRes = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`);
-        if (quoteRes.ok) {
-          const quoteData = await quoteRes.json();
+        const [quoteRes, floatRes, profileRes, newsRes] = await Promise.allSettled([
+          fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`),
+          fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`),
+          fetch(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`),
+          fetch(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`)
+        ]);
+
+        if (quoteRes.status === 'fulfilled' && quoteRes.value.ok) {
+          const quoteData = await quoteRes.value.json();
           if (Array.isArray(quoteData) && quoteData.length > 0) {
             quote = quoteData[0];
           }
         }
-      } catch (e: any) {
-        console.warn(`FMP quote fetch failed for ${ticker}:`, e.message);
-      }
 
-      try {
-        const floatRes = await fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`);
-        if (floatRes.ok) {
-          const floatData = await floatRes.json();
+        if (floatRes.status === 'fulfilled' && floatRes.value.ok) {
+          const floatData = await floatRes.value.json();
           if (Array.isArray(floatData) && floatData.length > 0) {
             floatShares = floatData[0].floatShares || 0;
             outstandingShares = floatData[0].outstandingShares || 0;
           }
         }
-      } catch (e: any) {
-        console.warn(`FMP shares-float fetch failed for ${ticker}:`, e.message);
-      }
 
-      try {
-        const newsRes = await fetch(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`);
-        if (newsRes.ok) {
-          newsData = await newsRes.json();
+        if (profileRes.status === 'fulfilled' && profileRes.value.ok) {
+          const profileData = await profileRes.value.json();
+          if (Array.isArray(profileData) && profileData.length > 0) {
+            profileAvgVolume = profileData[0].averageVolume || 0;
+          }
+        }
+
+        if (newsRes.status === 'fulfilled' && newsRes.value.ok) {
+          newsData = await newsRes.value.json();
         }
       } catch (e: any) {
-        console.warn(`FMP news fetch failed for ${ticker}:`, e.message);
+        console.warn(`Parallel FMP fetches failed/warned for ${ticker}:`, e.message);
       }
 
       // Fetch stock splits catalyst (within last/upcoming 7 days)
@@ -307,7 +330,7 @@ async function startServer() {
       }
 
       const finalVolume = volume > 0 ? volume : (quote?.volume || 0);
-      const avgVolume = quote?.avgVolume || 1;
+      const avgVolume = profileAvgVolume || quote?.avgVolume || 1;
       const rvol = parseFloat((finalVolume / avgVolume).toFixed(2));
 
       // Combine all catalysts

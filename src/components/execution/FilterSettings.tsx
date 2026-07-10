@@ -55,10 +55,10 @@ export function FilterSettings({
     });
   };
 
-  const handleGeminiFilterChange = (checked: boolean) => {
+  const handleCatalystValidationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     onSavePreferences({
       ...preferences,
-      geminiSentimentFilter: checked
+      catalystValidation: e.target.value as 'gemini' | 'keywords' | 'bypassed'
     });
   };
 
@@ -144,26 +144,26 @@ export function FilterSettings({
             </label>
           </div>
 
-          {/* Gemini AI Sentiment Check */}
+          {/* Catalyst Validation Choice */}
           <div className="border-t border-zinc-800 pt-3">
             <span className="block text-xs font-bold text-zinc-300 mb-2 flex items-center gap-1.5 text-purple-400">
               <Sparkles className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
-              Gemini AI News Sentiment Analysis (gemini-2.0-flash-lite)
+              Catalyst Validation Method
             </span>
-            <label className="flex items-start gap-2.5 text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={preferences.geminiSentimentFilter || false}
-                onChange={(e) => handleGeminiFilterChange(e.target.checked)}
-                className="mt-0.5 rounded border-zinc-800 bg-zinc-900 text-purple-500 focus:ring-0 focus:ring-offset-0 focus:border-purple-500 checked:bg-purple-600 checked:border-purple-600"
-              />
-              <div>
-                <span className="font-semibold text-zinc-300">Enable Gemini Sentiment Filter</span>
-                <p className="text-[10px] text-zinc-500 leading-normal mt-0.5">
-                  Use Gemini Flash Lite to analyze breaking news headlines. If sentiment is determined to be negative or neutral for the company, the engine will skip the trade setup.
-                </p>
-              </div>
-            </label>
+            <div className="flex flex-col gap-1.5">
+              <select
+                value={preferences.catalystValidation ?? 'gemini'}
+                onChange={handleCatalystValidationChange}
+                className="w-full rounded border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-white focus:border-purple-500 focus:outline-none cursor-pointer"
+              >
+                <option value="gemini">Gemini Sentiment (Requires Keywords)</option>
+                <option value="keywords">Keywords Only</option>
+                <option value="bypassed">Bypassed (Technical Breakout Only)</option>
+              </select>
+              <p className="text-[10px] text-zinc-500 leading-normal mt-1">
+                Configure how the engine validates fundamental news catalysts before trade entry.
+              </p>
+            </div>
           </div>
 
           {/* Live Screening Info */}

@@ -376,13 +376,15 @@ export function ExecutionEngine({
               }
 
               const blacklist = preferencesRef.current.blacklistedTickers || [];
-
               // Configuration limits
               const minPrice = preferencesRef.current.minPrice ?? 2.0;
               const maxPrice = preferencesRef.current.maxPrice ?? 20.0;
               const minGainPercent = preferencesRef.current.minGainPercent ?? 10;
               const minRvol = preferencesRef.current.minRvol ?? 5.0;
               const maxFloatMillions = preferencesRef.current.maxFloatMillions ?? 20;
+
+              const checkPriceRange = preferencesRef.current.checkPriceRange ?? true;
+              const checkDailyGain = preferencesRef.current.checkDailyGain ?? true;
 
               // Find the next gainer that passes baseline filters
               let selectedGainer: MarketGainer | null = null;
@@ -396,14 +398,17 @@ export function ExecutionEngine({
                   continue;
                 }
 
-                if (!passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)) {
+                const priceValid = !checkPriceRange || (g.price >= minPrice && g.price <= maxPrice);
+                const gainValid = !checkDailyGain || (g.changesPercentage >= minGainPercent);
+
+                if (!priceValid || !gainValid) {
                   if (!checkedSymbolsRef.current.has(g.symbol)) {
                     checkedSymbolsRef.current.add(g.symbol);
                     const reasons: string[] = [];
-                    if (g.price < minPrice || g.price > maxPrice) {
+                    if (checkPriceRange && (g.price < minPrice || g.price > maxPrice)) {
                       reasons.push(`Price $${g.price.toFixed(2)} out of bounds ($${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})`);
                     }
-                    if (g.changesPercentage < minGainPercent) {
+                    if (checkDailyGain && (g.changesPercentage < minGainPercent)) {
                       reasons.push(`Gain +${g.changesPercentage.toFixed(1)}% < ${minGainPercent}%`);
                     }
                     addLog(`[SCANNER] $${g.symbol} failed baseline filters: ${reasons.join(', ')}`, 'scan', g.symbol);
@@ -417,17 +422,22 @@ export function ExecutionEngine({
               }
 
               if (!selectedGainer) {
-                addLog(`[SCANNER] No live gainers pass baseline filters (price $${minPrice}–$${maxPrice}, gain ≥ ${minGainPercent}%). Waiting...`, 'scan');
+                const filterDesc = [
+                  checkPriceRange ? `price $${minPrice}–$${maxPrice}` : null,
+                  checkDailyGain ? `gain ≥ ${minGainPercent}%` : null
+                ].filter(Boolean).join(', ');
+                addLog(`[SCANNER] No live gainers pass baseline filters (${filterDesc || 'no filters active'}). Waiting...`, 'scan');
                 return;
               }
 
               // Add symbol to checked list
               checkedSymbolsRef.current.add(selectedGainer.symbol);
 
-              // Check if we have checked all checkable stocks in the list
-              const checkableGainers = currentGainers.filter(g =>
-                !blacklist.includes(g.symbol) &&
-                passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)
+              // Check if we checked all the checkable gainers
+              const checkableGainers = currentGainers.filter(g => 
+                !blacklist.includes(g.symbol) && 
+                (!checkPriceRange || (g.price >= minPrice && g.price <= maxPrice)) &&
+                (!checkDailyGain || (g.changesPercentage >= minGainPercent))
               );
               const allChecked = checkableGainers.length === 0 || checkableGainers.every(g => checkedSymbolsRef.current.has(g.symbol));
 
@@ -472,21 +482,33 @@ export function ExecutionEngine({
               }
 
               // Run all evaluation checks!
-              const passesPrice = liveData.price >= minPrice && liveData.price <= maxPrice;
-              const passesGain = selectedGainer.changesPercentage >= minGainPercent;
-              const passesRvol = passesRvolFilter(liveData.rvol, minRvol);
+              const checkRelativeVol = preferencesRef.current.checkRelativeVol ?? true;
+              const checkSharesFloat = preferencesRef.current.checkSharesFloat ?? true;
+              const checkTradingWindow = preferencesRef.current.checkTradingWindow ?? true;
+              const checkBullFlagPattern = preferencesRef.current.checkBullFlagPattern ?? true;
+              const checkStopDistance = preferencesRef.current.checkStopDistance ?? true;
+              const checkRiskReward = preferencesRef.current.checkRiskReward ?? true;
+
+              const catalystValidation = preferencesRef.current.catalystValidation ?? 'gemini';
+              const checkNewsCatalyst = catalystValidation === 'keywords' || catalystValidation === 'gemini';
+              const checkGeminiSentiment = catalystValidation === 'gemini';
+
+              const passesPrice = !checkPriceRange || (liveData.price >= minPrice && liveData.price <= maxPrice);
+              const passesGain = !checkDailyGain || (selectedGainer.changesPercentage >= minGainPercent);
+              const passesRvol = !checkRelativeVol || passesRvolFilter(liveData.rvol, minRvol);
               const hasKnownFloat = liveData.sharesOutstanding !== 0 && !!liveData.sharesOutstanding;
-              const passesFloat = hasKnownFloat && passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions);
-              const passesWindow = isWithinTradingWindow(extendedHours);
+              const passesFloat = !checkSharesFloat || (hasKnownFloat && passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions));
+              const passesWindow = !checkTradingWindow || isWithinTradingWindow(extendedHours);
 
               const catalystResult = validateCatalyst(liveData.catalyst);
-              const passesCatalyst = catalystResult.valid;
+              const passesCatalyst = !checkNewsCatalyst || catalystResult.valid;
 
-              // Gemini news sentiment analysis check (if enabled and news keyword passes)
+              // Gemini news sentiment analysis check (if enabled and news keyword passes, or news catalyst check is disabled but we have news)
               let geminiPass = true;
               let geminiReason = "";
-              if (preferencesRef.current.geminiSentimentFilter) {
-                if (passesCatalyst) {
+              if (checkGeminiSentiment) {
+                const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
+                if (checkNewsCatalyst ? passesCatalyst : hasActualNews) {
                   try {
                     const res = await fetch('/api/news/sentiment', {
                       method: 'POST',
@@ -509,8 +531,13 @@ export function ExecutionEngine({
                     geminiReason = `Sentiment check failed: ${err.message}`;
                   }
                 } else {
-                  geminiPass = false;
-                  geminiReason = "Skipped (no valid catalyst keyword)";
+                  if (checkNewsCatalyst) {
+                    geminiPass = false;
+                    geminiReason = "Skipped (no valid catalyst keyword)";
+                  } else {
+                    geminiPass = true;
+                    geminiReason = "Bypassed (no news catalyst to check)";
+                  }
                 }
               } else {
                 geminiReason = "Bypassed (Gemini sentiment filter disabled)";
@@ -520,25 +547,34 @@ export function ExecutionEngine({
               let passesPattern = false;
               let patternReason = "";
               let patternResult: any = null;
-              if (Array.isArray(candles) && candles.length >= 4) {
-                const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
-                patternResult = analyzeBullFlag(sorted);
-                passesPattern = patternResult.detected;
-                patternReason = patternResult.reason || "";
+              if (checkBullFlagPattern) {
+                if (Array.isArray(candles) && candles.length >= 4) {
+                  const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
+                  patternResult = analyzeBullFlag(sorted);
+                  passesPattern = patternResult.detected;
+                  patternReason = patternResult.reason || "";
+                } else {
+                  patternReason = `Insufficient candles (${candles?.length || 0} candles, minimum 4 required)`;
+                }
               } else {
-                patternReason = `Insufficient candles (${candles?.length || 0} candles, minimum 4 required)`;
+                passesPattern = true;
+                patternReason = "Bypassed (Bull Flag pattern check disabled)";
               }
 
               // Risk Management Checks (Stop Distance & R:R)
               let passesStop = false;
               let stopDistStr = "N/A";
-              const entryPrice = passesPattern ? patternResult.resistanceLevel : liveData.price;
-              const stopPrice = passesPattern ? patternResult.pullbackLow : 0;
+              const entryPrice = (checkBullFlagPattern && patternResult?.detected) ? patternResult.resistanceLevel : liveData.price;
+              const stopPrice = (checkBullFlagPattern && patternResult?.detected) ? patternResult.pullbackLow : 0;
               const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
 
-              if (passesPattern) {
-                passesStop = validateStopDistance(entryPrice, stopPrice, maxStopDistance);
-                stopDistStr = `$${(entryPrice - stopPrice).toFixed(2)}`;
+              if (checkStopDistance) {
+                const finalStopPrice = stopPrice > 0 ? stopPrice : (entryPrice * 0.98);
+                passesStop = validateStopDistance(entryPrice, finalStopPrice, maxStopDistance);
+                stopDistStr = `$${(entryPrice - finalStopPrice).toFixed(2)}`;
+              } else {
+                passesStop = true;
+                stopDistStr = "Bypassed (Stop distance check disabled)";
               }
 
               let passesRR = false;
@@ -546,13 +582,18 @@ export function ExecutionEngine({
               let targetPrice = 0;
               const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
 
-              if (passesPattern && passesStop) {
-                const targetResult = calculateTarget(entryPrice, stopPrice, undefined, minRewardRiskRatio);
+              if (checkRiskReward) {
+                const finalStopPrice = stopPrice > 0 ? stopPrice : (entryPrice * 0.98);
+                const targetResult = calculateTarget(entryPrice, finalStopPrice, undefined, minRewardRiskRatio);
                 if (targetResult) {
                   passesRR = true;
                   rrRatioStr = `${targetResult.ratio}:1`;
                   targetPrice = targetResult.targetPrice;
                 }
+              } else {
+                passesRR = true;
+                rrRatioStr = "Bypassed (Risk/Reward check disabled)";
+                targetPrice = entryPrice * 1.04; // default target (4% gain)
               }
 
               const allPass = passesPrice && passesGain && passesRvol && passesFloat && passesWindow && passesCatalyst && geminiPass && passesPattern && passesStop && passesRR;
@@ -562,16 +603,16 @@ export function ExecutionEngine({
               const floatDisplay = hasKnownFloat ? formatCompact(liveData.sharesOutstanding) : "Unknown";
               const report = `[EVALUATION] Buy Entrance Checklist for $${selectedGainer.symbol}:
 ----------------------------------------------------------------------
-1. Price Range:       ${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})
-2. Daily Gain:        ${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)
-3. Relative Vol:      ${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)
-4. Shares Float:      ${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})
-5. Trading Window:    ${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)
-6. News Catalyst:     ${statusChar(passesCatalyst)} (${passesCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})
+1. Price Range:       ${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})${!checkPriceRange ? ' [BYPASSED]' : ''}
+2. Daily Gain:        ${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)${!checkDailyGain ? ' [BYPASSED]' : ''}
+3. Relative Vol:      ${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)${!checkRelativeVol ? ' [BYPASSED]' : ''}
+4. Shares Float:      ${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})${!checkSharesFloat ? ' [BYPASSED]' : ''}
+5. Trading Window:    ${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)${!checkTradingWindow ? ' [BYPASSED]' : ''}
+6. News Catalyst:     ${statusChar(passesCatalyst)} (${passesCatalyst ? (checkNewsCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : 'Bypassed') : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})${!checkNewsCatalyst ? ' [BYPASSED]' : ''}
 7. Gemini Sentiment:  ${statusChar(geminiPass)} (${geminiReason})
-8. Bull Flag Pattern: ${statusChar(passesPattern)} (${passesPattern ? `Detected at Resistance $${patternResult.resistanceLevel.toFixed(2)}` : patternReason})
-9. Stop Distance:     ${statusChar(passesStop)} (${stopDistStr} | Req: <=$${maxStopDistance.toFixed(2)})
-10. Risk/Reward:      ${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)
+8. Bull Flag Pattern: ${statusChar(passesPattern)} (${passesPattern ? (checkBullFlagPattern ? `Detected at Resistance $${patternResult?.resistanceLevel?.toFixed(2)}` : 'Bypassed') : patternReason})${!checkBullFlagPattern ? ' [BYPASSED]' : ''}
+9. Stop Distance:     ${statusChar(passesStop)} (${stopDistStr} | Req: <=$${maxStopDistance.toFixed(2)})${!checkStopDistance ? ' [BYPASSED]' : ''}
+10. Risk/Reward:      ${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)${!checkRiskReward ? ' [BYPASSED]' : ''}
 ----------------------------------------------------------------------
 Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANCE REQUIREMENTS'}`;
 
@@ -598,7 +639,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                   entryPrice: parseFloat(entryPrice.toFixed(2)),
                   shares: computedShares,
                   target: targetPrice,
-                  stop: parseFloat(stopPrice.toFixed(2)),
+                  stop: stopPrice > 0 ? stopPrice : parseFloat((entryPrice * 0.98).toFixed(2)),
                   exitPrice: 0,
                   pnl: 0
                 };
@@ -615,7 +656,21 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
           case 1: // CATALYST VALIDATION — Require a fundamental news driver
             if (activeTrade) {
+              const catalystValidation = preferencesRef.current.catalystValidation ?? 'gemini';
+              const checkNewsCatalyst = catalystValidation === 'keywords' || catalystValidation === 'gemini';
+              const checkGeminiSentiment = catalystValidation === 'gemini';
+
+              if (!checkNewsCatalyst && !checkGeminiSentiment) {
+                addLog(`[CATALYST] Bypassed news catalyst and Gemini checks (News Catalyst and Gemini filters disabled)`, 'info', activeTrade.ticker);
+                changeStep(2);
+                break;
+              }
+
               const runKeywordFallback = async (reason: string) => {
+                if (!checkNewsCatalyst) {
+                  addLog(`[CATALYST] Bypassed keyword validator for $${activeTrade.ticker} (News Catalyst filter disabled)`, 'info', activeTrade.ticker);
+                  return true;
+                }
                 addLog(`[CATALYST FALLBACK] Running keyword validator for $${activeTrade.ticker} because: ${reason}`, 'info', activeTrade.ticker);
                 const catalystResult = validateCatalyst(activeTrade.catalyst);
                 if (!catalystResult.valid) {
@@ -629,35 +684,42 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
               };
 
               // Gemini Sentiment Analysis Filter
-              if (preferencesRef.current.geminiSentimentFilter) {
-                addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
-                try {
-                  const res = await fetch('/api/news/sentiment', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      ticker: activeTrade.ticker,
-                      headline: activeTrade.catalyst
-                    })
-                  });
-                  if (!res.ok) {
-                    throw new Error(`Server returned status ${res.status}`);
+              if (checkGeminiSentiment) {
+                const hasActualNews = activeTrade.catalyst && !activeTrade.catalyst.startsWith("No recent fundamental catalyst");
+                const catalystValid = checkNewsCatalyst ? validateCatalyst(activeTrade.catalyst).valid : true;
+
+                if (checkNewsCatalyst ? catalystValid : hasActualNews) {
+                  addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
+                  try {
+                    const res = await fetch('/api/news/sentiment', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        ticker: activeTrade.ticker,
+                        headline: activeTrade.catalyst
+                      })
+                    });
+                    if (!res.ok) {
+                      throw new Error(`Server returned status ${res.status}`);
+                    }
+                    const data = await res.json();
+                    if (!data.isPositive) {
+                      addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                      await updateCurrentTrade(null);
+                      changeStep(0);
+                      return;
+                    }
+                    addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
+                  } catch (err: any) {
+                    addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
+                    const success = await runKeywordFallback(err.message);
+                    if (!success) return;
                   }
-                  const data = await res.json();
-                  if (!data.isPositive) {
-                    addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
-                    await updateCurrentTrade(null);
-                    changeStep(0);
-                    return;
-                  }
-                  addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
-                } catch (err: any) {
-                  addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
-                  const success = await runKeywordFallback(err.message);
+                } else {
+                  const success = await runKeywordFallback(checkNewsCatalyst ? 'no valid catalyst keyword' : 'no news to check');
                   if (!success) return;
                 }
               } else {
-                // If Gemini is disabled, run keyword validation directly
                 const success = await runKeywordFallback('Gemini filter is disabled');
                 if (!success) return;
               }
@@ -670,63 +732,85 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
           case 2: // PATTERN DETECTION — Bull flag from 1-min candles
             if (activeTrade) {
-              addLog(`[PATTERN] Fetching 1-min candle data for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
+              const checkBullFlagPattern = preferencesRef.current.checkBullFlagPattern ?? true;
+              const checkStopDistance = preferencesRef.current.checkStopDistance ?? true;
+              const checkRiskReward = preferencesRef.current.checkRiskReward ?? true;
 
-              let candles: any[];
-              try {
-                const res = await fetch(`/api/stock/${activeTrade.ticker}/chart/1min`);
-                if (!res.ok) throw new Error(`Chart API error: ${res.status}`);
-                candles = await res.json();
-              } catch (err: any) {
-                addLog(`[SYSTEM ERROR] Failed to fetch 1-min chart for $${activeTrade.ticker}: ${err.message}. Skipping.`, 'error', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
+              let candles: any[] = [];
+              if (checkBullFlagPattern) {
+                addLog(`[PATTERN] Fetching 1-min candle data for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
+                try {
+                  const res = await fetch(`/api/stock/${activeTrade.ticker}/chart/1min`);
+                  if (!res.ok) throw new Error(`Chart API error: ${res.status}`);
+                  candles = await res.json();
+                } catch (err: any) {
+                  addLog(`[SYSTEM ERROR] Failed to fetch 1-min chart for $${activeTrade.ticker}: ${err.message}. Skipping.`, 'error', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
+                }
               }
-
-              if (!Array.isArray(candles) || candles.length < 5) {
-                addLog(`[PATTERN] Insufficient candle data for $${activeTrade.ticker} (${candles?.length || 0} candles). Skipping.`, 'warn', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
-              }
-
-              // FMP returns newest first — reverse to chronological order
-              const sorted = [...candles].reverse();
 
               // Run bull flag detection
-              const pattern = detectBullFlag(sorted);
-
-              if (!pattern) {
-                addLog(`[PATTERN] No bull flag pattern detected for $${activeTrade.ticker}. Skipping.`, 'scan', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
+              let patternResult: any = null;
+              if (checkBullFlagPattern) {
+                if (!Array.isArray(candles) || candles.length < 5) {
+                  addLog(`[PATTERN] Insufficient candle data for $${activeTrade.ticker} (${candles?.length || 0} candles). Skipping.`, 'warn', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
+                }
+                const sorted = [...candles].reverse();
+                patternResult = detectBullFlag(sorted);
+                if (!patternResult) {
+                  addLog(`[PATTERN] No bull flag pattern detected for $${activeTrade.ticker}. Skipping.`, 'scan', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
+                }
+                addLog(`[PATTERN] ✓ Bull Flag detected for $${activeTrade.ticker}! Resistance: $${patternResult.resistanceLevel.toFixed(2)} | Pullback Low: $${patternResult.pullbackLow.toFixed(2)}`, 'found', activeTrade.ticker);
+              } else {
+                addLog(`[PATTERN] Bypassed bull flag pattern check for $${activeTrade.ticker} (Bull Flag pattern check disabled)`, 'info', activeTrade.ticker);
               }
-
-              addLog(`[PATTERN] ✓ Bull Flag detected for $${activeTrade.ticker}! Resistance: $${pattern.resistanceLevel.toFixed(2)} | Pullback Low: $${pattern.pullbackLow.toFixed(2)}`, 'found', activeTrade.ticker);
 
               // Configuration limits
               const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
               const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
 
+              // Entry & Stop calculations
+              const entryPrice = (checkBullFlagPattern && patternResult) ? patternResult.resistanceLevel : (activeTrade.entryPrice || 0);
+              const stopPrice = (checkBullFlagPattern && patternResult) ? patternResult.pullbackLow : 0;
+              const finalStopPrice = stopPrice > 0 ? stopPrice : (entryPrice * 0.98);
+
               // Risk management: validate stop distance
-              const entryPrice = pattern.resistanceLevel; // Entry at breakout above resistance
-              if (!validateStopDistance(entryPrice, pattern.pullbackLow, maxStopDistance)) {
-                const stopDist = (entryPrice - pattern.pullbackLow).toFixed(2);
-                addLog(`[RISK] $${activeTrade.ticker} stop distance $${stopDist} exceeds $${maxStopDistance.toFixed(2)} max. Skipping trade.`, 'warn', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
+              if (checkStopDistance) {
+                if (!validateStopDistance(entryPrice, finalStopPrice, maxStopDistance)) {
+                  const stopDist = (entryPrice - finalStopPrice).toFixed(2);
+                  addLog(`[RISK] $${activeTrade.ticker} stop distance $${stopDist} exceeds $${maxStopDistance.toFixed(2)} max. Skipping trade.`, 'warn', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
+                }
+              } else {
+                addLog(`[RISK] Bypassed stop distance check for $${activeTrade.ticker} (Stop distance check disabled)`, 'info', activeTrade.ticker);
               }
 
               // Calculate target with configured R:R minimum
-              const targetResult = calculateTarget(entryPrice, pattern.pullbackLow, undefined, minRewardRiskRatio);
-              if (!targetResult) {
-                addLog(`[RISK] $${activeTrade.ticker} invalid risk:reward setup. Skipping.`, 'warn', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
+              let targetPrice = entryPrice * 1.04; // default target
+              let targetRatioStr = "Bypassed";
+              
+              if (checkRiskReward) {
+                const targetResult = calculateTarget(entryPrice, finalStopPrice, undefined, minRewardRiskRatio);
+                if (!targetResult) {
+                  addLog(`[RISK] $${activeTrade.ticker} invalid risk:reward setup. Skipping.`, 'warn', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
+                }
+                targetPrice = targetResult.targetPrice;
+                targetRatioStr = `${targetResult.ratio}:1`;
+              } else {
+                addLog(`[RISK] Bypassed risk:reward check for $${activeTrade.ticker} (Risk/Reward check disabled)`, 'info', activeTrade.ticker);
               }
 
               // Calculate shares based on position size preference
@@ -745,13 +829,17 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 setup: 'Bull Flag',
                 entryPrice: parseFloat(entryPrice.toFixed(2)),
                 shares: computedShares,
-                target: targetResult.targetPrice,
-                stop: parseFloat(pattern.pullbackLow.toFixed(2))
+                target: targetPrice,
+                stop: parseFloat(finalStopPrice.toFixed(2))
               };
 
               await updateCurrentTrade(setupTrade);
-              addLog(`[SETUP] $${setupTrade.ticker} Bull Flag confirmed. Entry: $${setupTrade.entryPrice} | Stop: $${setupTrade.stop} | Target: $${setupTrade.target} (${targetResult.ratio}:1 R:R) | Shares: ${setupTrade.shares}`, 'info', setupTrade.ticker);
-              addLog(`[LEVEL 2] Watching for resistance break at $${pattern.resistanceLevel.toFixed(2)}...`, 'info', setupTrade.ticker);
+              addLog(`[SETUP] $${setupTrade.ticker} trade setup confirmed. Entry: $${setupTrade.entryPrice} | Stop: $${setupTrade.stop} | Target: $${setupTrade.target} (${targetRatioStr} R:R) | Shares: ${setupTrade.shares}`, 'info', setupTrade.ticker);
+              if (checkBullFlagPattern && patternResult) {
+                addLog(`[LEVEL 2] Watching for resistance break at $${patternResult.resistanceLevel.toFixed(2)}...`, 'info', setupTrade.ticker);
+              } else {
+                addLog(`[LEVEL 2] Watching for breakout entry trigger at $${setupTrade.entryPrice.toFixed(2)}...`, 'info', setupTrade.ticker);
+              }
               changeStep(3);
             } else {
               changeStep(0);
