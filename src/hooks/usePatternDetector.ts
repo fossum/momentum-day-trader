@@ -29,6 +29,15 @@ export interface BullFlagResult {
   pullbackCandles: Candle[];
 }
 
+export interface BullFlagDiagnostic {
+  detected: boolean;
+  reason?: string;
+  resistanceLevel?: number;
+  pullbackLow?: number;
+  flagpoleCandles?: Candle[];
+  pullbackCandles?: Candle[];
+}
+
 export interface CatalystResult {
   valid: boolean;
   matchedKeyword: string | null;
@@ -363,4 +372,108 @@ export function isWithinTradingWindowAt(date: Date, extendedHours: boolean = fal
   } catch {
     return true;
   }
+}
+
+/**
+ * Detailed diagnostic check for a bull flag pattern.
+ * If detected, returns the pattern setup details.
+ * If not detected, evaluates the most recent candidate setups to explain why it failed.
+ */
+export function analyzeBullFlag(candles: Candle[]): BullFlagDiagnostic {
+  if (candles.length < 4) {
+    return { detected: false, reason: `Insufficient candle data (${candles.length} candles, minimum 4 required)` };
+  }
+
+  const emaValues = calculate9EMA(candles);
+
+  // First, try standard detection
+  const standardResult = detectBullFlag(candles);
+  if (standardResult) {
+    return {
+      detected: true,
+      resistanceLevel: standardResult.resistanceLevel,
+      pullbackLow: standardResult.pullbackLow,
+      flagpoleCandles: standardResult.flagpoleCandles,
+      pullbackCandles: standardResult.pullbackCandles
+    };
+  }
+
+  // If not detected, analyze candidate setups near the end of the data to find the closest match or report failure
+  const pullbackEnd = candles.length - 1;
+  let bestFailureReason = "No candidate flagpole or pullback setup found";
+  let bestScore = -1;
+
+  // Look for any flagpole-pullback combinations near the end
+  // (matches the scan logic of detectBullFlag)
+  for (let pullbackLen = 2; pullbackLen <= 4; pullbackLen++) {
+    const pullbackStart = pullbackEnd - pullbackLen + 1;
+    if (pullbackStart < 2) continue;
+
+    const pullbackCandles = candles.slice(pullbackStart, pullbackEnd + 1);
+    
+    // Check if pullback holds 9 EMA
+    const pullbackHoldsEma = pullbackCandles.every((c, i) => {
+      const emaIdx = pullbackStart + i;
+      return emaIdx < emaValues.length && c.low >= emaValues[emaIdx] * 0.998;
+    });
+
+    // Check if pullback candles are red/doji
+    const allRedOrDoji = pullbackCandles.every(c => c.close <= c.open + 0.005);
+
+    for (let flagpoleLen = 2; flagpoleLen <= 3; flagpoleLen++) {
+      const flagpoleStart = pullbackStart - flagpoleLen;
+      if (flagpoleStart < 0) continue;
+
+      const flagpoleCandles = candles.slice(flagpoleStart, pullbackStart);
+      
+      const allGreen = flagpoleCandles.every(c => c.close > c.open);
+      
+      let makingNewHighs = true;
+      for (let i = 1; i < flagpoleCandles.length; i++) {
+        if (flagpoleCandles[i].high <= flagpoleCandles[i - 1].high) {
+          makingNewHighs = false;
+          break;
+        }
+      }
+
+      const avgFlagpoleVol = flagpoleCandles.reduce((s, c) => s + c.volume, 0) / flagpoleCandles.length;
+      const avgPullbackVol = pullbackCandles.reduce((s, c) => s + c.volume, 0) / pullbackCandles.length;
+      const volRatio = avgFlagpoleVol > 0 ? (avgPullbackVol / avgFlagpoleVol) : 0;
+
+      // Identify the specific failure reason for this candidate using a scoring system
+      let score = 0;
+      let failureReason = "";
+
+      if (allGreen) {
+        score += 1;
+        if (makingNewHighs) {
+          score += 1;
+          if (allRedOrDoji) {
+            score += 1;
+            if (pullbackHoldsEma) {
+              score += 1;
+              if (volRatio >= 0.5) {
+                failureReason = `Pullback average volume is too high (${(volRatio * 100).toFixed(0)}% of flagpole vol, required < 50%)`;
+              }
+            } else {
+              failureReason = `Pullback candle low broke below the 9 EMA`;
+            }
+          } else {
+            failureReason = `Pullback candles are not all red/doji (close <= open)`;
+          }
+        } else {
+          failureReason = `Flagpole candles are not making higher highs`;
+        }
+      } else {
+        failureReason = `Flagpole candles are not all green (close > open)`;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestFailureReason = failureReason;
+      }
+    }
+  }
+
+  return { detected: false, reason: bestFailureReason };
 }

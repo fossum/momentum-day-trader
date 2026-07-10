@@ -111,7 +111,7 @@ export function TerminalDisplay({
               >
                 <span className="text-zinc-600 flex-shrink-0 select-none font-mono text-xs md:text-sm">[{log.time}]</span>
                 <span className="flex-shrink-0 mt-1">{icon}</span>
-                <span className={`${textColor} flex-1 ${isFullscreen ? 'whitespace-normal break-words text-sm md:text-base font-medium' : 'truncate'}`}>
+                <span className={`${textColor} flex-1 whitespace-pre-wrap break-words ${isFullscreen ? 'text-sm md:text-base font-medium' : 'text-xs'}`}>
                   {log.text}
                 </span>
                 

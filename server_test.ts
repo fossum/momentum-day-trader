@@ -9,6 +9,35 @@ dotenv.config();
 // Disable TLS verification for IBKR Client Portal Gateway self-signed certs
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
+// Helper to calculate EMA from a chronological list of candles
+function computeLocalEma(candles: any[], period: number = 9): number[] {
+  if (candles.length < period) {
+    const sum = candles.reduce((acc, c) => acc + (parseFloat(c.close) || 0), 0);
+    return candles.map(() => sum / (candles.length || 1));
+  }
+
+  const multiplier = 2 / (period + 1);
+  const emaValues: number[] = [];
+
+  // Seed EMA with the SMA of the first `period` candles
+  let sum = 0;
+  for (let i = 0; i < period; i++) {
+    sum += (parseFloat(candles[i].close) || 0);
+    emaValues.push(sum / (i + 1));
+  }
+  emaValues[period - 1] = sum / period;
+
+  // Calculate EMA for remaining candles
+  for (let i = period; i < candles.length; i++) {
+    const prevEma = emaValues[i - 1];
+    const closeVal = parseFloat(candles[i].close) || 0;
+    const ema = (closeVal - prevEma) * multiplier + prevEma;
+    emaValues.push(ema);
+  }
+
+  return emaValues;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3001;
@@ -160,6 +189,57 @@ async function startServer() {
         console.warn(`FMP news fetch failed for ${ticker}:`, e.message);
       }
 
+      // Fetch stock splits catalyst (within last/upcoming 7 days)
+      let splitCatalyst: string | null = null;
+      try {
+        const splitsRes = await fetch(`https://financialmodelingprep.com/stable/splits?symbol=${ticker}&apikey=${key}`);
+        if (splitsRes.ok) {
+          const splitsData = await splitsRes.json();
+          if (Array.isArray(splitsData) && splitsData.length > 0) {
+            const recentSplit = splitsData.find((s: any) => {
+              if (!s.date) return false;
+              const splitDate = new Date(s.date);
+              const now = new Date();
+              const diffTime = Math.abs(now.getTime() - splitDate.getTime());
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              return diffDays <= 7;
+            });
+            if (recentSplit) {
+              splitCatalyst = `SEC Filing: Stock Split Catalyst: ${recentSplit.numerator}-to-${recentSplit.denominator} split on ${recentSplit.date}`;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`FMP splits fetch failed for ${ticker}:`, e.message);
+      }
+
+      // Fetch insider trading catalyst (purchases within last 30 days)
+      let insiderCatalyst: string | null = null;
+      try {
+        const insiderRes = await fetch(`https://financialmodelingprep.com/stable/insider-trading/search?symbol=${ticker}&limit=10&apikey=${key}`);
+        if (insiderRes.ok) {
+          const insiderData = await insiderRes.json();
+          if (Array.isArray(insiderData) && insiderData.length > 0) {
+            const recentPurchase = insiderData.find((t: any) => {
+              if (!t.transactionDate || !t.transactionType) return false;
+              const isPurchase = t.transactionType.toUpperCase().includes("PURCHASE") || t.acquisitionOrDisposition === "A";
+              if (!isPurchase) return false;
+              
+              const txDate = new Date(t.transactionDate);
+              const now = new Date();
+              const diffTime = Math.abs(now.getTime() - txDate.getTime());
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              return diffDays <= 30;
+            });
+            if (recentPurchase) {
+              insiderCatalyst = `SEC Filing: Insider Buying Catalyst: ${recentPurchase.reportingName} (${recentPurchase.typeOfOwner}) purchased ${recentPurchase.securitiesTransacted} shares at $${recentPurchase.price} on ${recentPurchase.transactionDate}`;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`FMP insider-trading fetch failed for ${ticker}:`, e.message);
+      }
+
       const finalPrice = price !== null ? price : (quote ? parseFloat(quote.price) : null);
       if (finalPrice === null || isNaN(finalPrice)) {
         throw new Error(`Failed to fetch price for ticker ${ticker} from both Broker and FMP.`);
@@ -169,9 +249,17 @@ async function startServer() {
       const avgVolume = quote?.avgVolume || 1;
       const rvol = parseFloat((finalVolume / avgVolume).toFixed(2));
 
-      let catalyst = "No recent news catalyst found on FMP.";
+      // Combine all catalysts
+      const catalystsList: string[] = [];
+      if (splitCatalyst) catalystsList.push(splitCatalyst);
+      if (insiderCatalyst) catalystsList.push(insiderCatalyst);
       if (newsData && newsData.length > 0 && newsData[0].title) {
-        catalyst = newsData[0].title;
+        catalystsList.push(`News: ${newsData[0].title}`);
+      }
+
+      let catalyst = "No recent fundamental catalyst found on FMP.";
+      if (catalystsList.length > 0) {
+        catalyst = catalystsList.join(" | ");
       }
 
       return res.json({
@@ -208,6 +296,53 @@ async function startServer() {
       const response = await fetch(`https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`);
       if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
       const data = await response.json();
+
+      // Double check EMA calculations against FMP's pre-calculated indicator
+      try {
+        if (Array.isArray(data) && data.length > 0) {
+          const chronological = [...data].reverse();
+          const localEmaValues = computeLocalEma(chronological, 9);
+          
+          const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
+          const emaApiRes = await fetch(emaApiUrl);
+          if (emaApiRes.ok) {
+            const fmpEmaData = await emaApiRes.json();
+            if (Array.isArray(fmpEmaData)) {
+              // Create a map of date -> ema for quick lookup
+              const fmpEmaMap = new Map<string, number>();
+              fmpEmaData.forEach((item: any) => {
+                if (item.date && item.ema !== undefined && item.ema !== null) {
+                  fmpEmaMap.set(item.date, parseFloat(item.ema));
+                }
+              });
+
+              // Compare
+              let totalChecks = 0;
+              let discrepanciesCount = 0;
+              chronological.forEach((candle: any, idx: number) => {
+                const localEmaVal = localEmaValues[idx];
+                const fmpEmaVal = fmpEmaMap.get(candle.date);
+                if (fmpEmaVal !== undefined && !isNaN(localEmaVal)) {
+                  totalChecks++;
+                  const diff = Math.abs(localEmaVal - fmpEmaVal);
+                  if (diff > 0.05) {
+                    discrepanciesCount++;
+                    console.warn(`[EMA CHECK WARNING] Discrepancy for ${ticker} at ${candle.date}: Computed = ${localEmaVal.toFixed(4)}, FMP = ${fmpEmaVal.toFixed(4)} (diff: ${diff.toFixed(4)})`);
+                  }
+                }
+              });
+              if (discrepanciesCount > 0) {
+                console.warn(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. Found ${discrepanciesCount} discrepancies exceeding 0.05 threshold.`);
+              } else {
+                console.log(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. No discrepancies found.`);
+              }
+            }
+          }
+        }
+      } catch (emaCheckError: any) {
+        console.warn(`EMA check verification failed for ${ticker}:`, emaCheckError.message);
+      }
+
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -242,6 +377,61 @@ async function startServer() {
 
       res.json(mappedData);
     } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/market/status", async (req, res) => {
+    try {
+      const key = getFmpKey();
+      
+      // Get today's date in New York timezone (YYYY-MM-DD)
+      const etString = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+      const etDate = new Date(etString);
+      const year = etDate.getFullYear();
+      const month = String(etDate.getMonth() + 1).padStart(2, '0');
+      const day = String(etDate.getDate()).padStart(2, '0');
+      const todayStr = `${year}-${month}-${day}`;
+
+      // 1. Fetch global exchange market hours for NASDAQ
+      const hoursRes = await fetch(`https://financialmodelingprep.com/stable/exchange-market-hours?exchange=NASDAQ&apikey=${key}`);
+      if (!hoursRes.ok) throw new Error(`Market Hours API failed with status ${hoursRes.status}`);
+      const hoursData = await hoursRes.json();
+      const marketHours = Array.isArray(hoursData) && hoursData.length > 0 ? hoursData[0] : null;
+
+      // 2. Fetch holiday calendar for today
+      let isHoliday = false;
+      let holidayName: string | null = null;
+      try {
+        const holidaysRes = await fetch(`https://financialmodelingprep.com/stable/holidays-by-exchange?exchange=NASDAQ&from=${todayStr}&to=${todayStr}&apikey=${key}`);
+        if (holidaysRes.ok) {
+          const holidaysData = await holidaysRes.json();
+          if (Array.isArray(holidaysData) && holidaysData.length > 0) {
+            const holiday = holidaysData.find((h: any) => h.isClosed);
+            if (holiday) {
+              isHoliday = true;
+              holidayName = holiday.name || "Market Holiday";
+            }
+          }
+        }
+      } catch (holidayError: any) {
+        console.warn("Failed to fetch market holidays:", holidayError.message);
+      }
+
+      // If it is a holiday, override isMarketOpen to false
+      const finalIsMarketOpen = marketHours ? (marketHours.isMarketOpen && !isHoliday) : false;
+
+      res.json({
+        isMarketOpen: finalIsMarketOpen,
+        openingHour: marketHours?.openingHour || "09:30 AM -04:00",
+        closingHour: marketHours?.closingHour || "04:00 PM -04:00",
+        timezone: marketHours?.timezone || "America/New_York",
+        isHoliday,
+        holidayName,
+        currentDate: todayStr
+      });
+    } catch (error: any) {
+      console.error("Market status retrieval failure:", error.message);
       res.status(500).json({ error: error.message });
     }
   });

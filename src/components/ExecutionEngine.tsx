@@ -14,7 +14,8 @@ import {
   passesRvolFilter,
   passesFloatFilter,
   isWithinTradingWindow,
-  formatCompact
+  formatCompact,
+  analyzeBullFlag
 } from '../hooks/usePatternDetector';
 import { EngineControls } from './execution/EngineControls';
 import { FilterSettings } from './execution/FilterSettings';
@@ -55,6 +56,14 @@ export function ExecutionEngine({
   const [blacklistedInput, setBlacklistedInput] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [activePrompt, setActivePrompt] = useState<any | null>(null);
+  const [marketStatus, setMarketStatus] = useState<{
+    isMarketOpen: boolean;
+    timezone: string;
+    openingHour: string;
+    closingHour: string;
+    isHoliday: boolean;
+    holidayName: string | null;
+  } | null>(null);
 
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const currentTradeRef = useRef<SimulatedTrade | null>(null);
@@ -79,6 +88,24 @@ export function ExecutionEngine({
     gainersRef.current = gainers;
     checkedSymbolsRef.current.clear();
   }, [gainers]);
+
+  useEffect(() => {
+    const checkMarketStatus = async () => {
+      try {
+        const res = await fetch('/api/market/status');
+        if (res.ok) {
+          const data = await res.json();
+          setMarketStatus(data);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch market status:", err);
+      }
+    };
+
+    checkMarketStatus();
+    const interval = setInterval(checkMarketStatus, 10 * 60 * 1000); // 10 minutes
+    return () => clearInterval(interval);
+  }, []);
 
   const changeStep = (newStep: number) => {
     stepRef.current = newStep;
@@ -330,6 +357,18 @@ export function ExecutionEngine({
                 return;
               }
 
+              // Server-side market status and holiday check
+              if (marketStatus) {
+                if (marketStatus.isHoliday) {
+                  addLog(`[SYSTEM] Today is a market holiday (${marketStatus.holidayName || 'Exchange Closed'}). Engine idle.`, 'info');
+                  return;
+                }
+                if (!marketStatus.isMarketOpen && !isWithinTradingWindow(true)) {
+                  addLog(`[SYSTEM] FMP reports market is closed. Engine idle.`, 'info');
+                  return;
+                }
+              }
+
               const currentGainers = gainersRef.current;
               if (!currentGainers || currentGainers.length === 0) {
                 addLog('[SCANNER] No live gainers available from FMP. Waiting for market data...', 'scan');
@@ -358,6 +397,17 @@ export function ExecutionEngine({
                 }
 
                 if (!passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)) {
+                  if (!checkedSymbolsRef.current.has(g.symbol)) {
+                    checkedSymbolsRef.current.add(g.symbol);
+                    const reasons: string[] = [];
+                    if (g.price < minPrice || g.price > maxPrice) {
+                      reasons.push(`Price $${g.price.toFixed(2)} out of bounds ($${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})`);
+                    }
+                    if (g.changesPercentage < minGainPercent) {
+                      reasons.push(`Gain +${g.changesPercentage.toFixed(1)}% < ${minGainPercent}%`);
+                    }
+                    addLog(`[SCANNER] $${g.symbol} failed baseline filters: ${reasons.join(', ')}`, 'scan', g.symbol);
+                  }
                   continue;
                 }
 
@@ -389,81 +439,194 @@ export function ExecutionEngine({
 
               addLog(`[SCANNER] Evaluating $${selectedGainer.symbol} (${selectedGainer.name}) — +${selectedGainer.changesPercentage.toFixed(1)}% at $${selectedGainer.price.toFixed(2)}`, 'scan', selectedGainer.symbol);
 
-              // Fetch live data for RVOL and catalyst
-              let liveData: any;
+              // Fetch live data & 1-min chart candles in parallel
+              let liveData: any = null;
+              let candles: any[] = [];
               try {
-                const res = await fetch(`/api/stock/${selectedGainer.symbol}/live-data`, {
-                  headers: {
-                    'x-brokerage': preferencesRef.current.brokerage || '',
-                    'x-robinhood-token': preferencesRef.current.robinhoodToken || '',
-                    'x-ibkr-url': preferencesRef.current.ibkrUrl || ''
-                  }
-                });
-                if (!res.ok) {
-                  const errData = await res.json();
-                  throw new Error(errData.error || res.statusText);
+                const [liveRes, chartRes] = await Promise.all([
+                  fetch(`/api/stock/${selectedGainer.symbol}/live-data`, {
+                    headers: {
+                      'x-brokerage': preferencesRef.current.brokerage || '',
+                      'x-robinhood-token': preferencesRef.current.robinhoodToken || '',
+                      'x-ibkr-url': preferencesRef.current.ibkrUrl || ''
+                    }
+                  }),
+                  fetch(`/api/stock/${selectedGainer.symbol}/chart/1min`)
+                ]);
+
+                if (liveRes.ok) {
+                  liveData = await liveRes.json();
+                } else {
+                  const errData = await liveRes.json();
+                  throw new Error(`Live data: ${errData.error || liveRes.statusText}`);
                 }
-                liveData = await res.json();
+
+                if (chartRes.ok) {
+                  candles = await chartRes.json();
+                } else {
+                  throw new Error(`Chart data: ${chartRes.statusText}`);
+                }
               } catch (err: any) {
-                addLog(`[SYSTEM ERROR] Failed to fetch live data for $${selectedGainer.symbol}: ${err.message}. Skipping.`, 'error', selectedGainer.symbol);
+                addLog(`[SYSTEM ERROR] Failed to fetch data for $${selectedGainer.symbol}: ${err.message}. Skipping.`, 'error', selectedGainer.symbol);
                 return;
               }
 
-              // RVOL check
-              if (!passesRvolFilter(liveData.rvol, minRvol)) {
-                addLog(`[SCANNER] $${selectedGainer.symbol} RVOL ${liveData.rvol}x < ${minRvol}x threshold. Skipping.`, 'scan', selectedGainer.symbol);
-                return;
+              // Run all evaluation checks!
+              const passesPrice = liveData.price >= minPrice && liveData.price <= maxPrice;
+              const passesGain = selectedGainer.changesPercentage >= minGainPercent;
+              const passesRvol = passesRvolFilter(liveData.rvol, minRvol);
+              const hasKnownFloat = liveData.sharesOutstanding !== 0 && !!liveData.sharesOutstanding;
+              const passesFloat = hasKnownFloat && passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions);
+              const passesWindow = isWithinTradingWindow(extendedHours);
+
+              const catalystResult = validateCatalyst(liveData.catalyst);
+              const passesCatalyst = catalystResult.valid;
+
+              // Gemini news sentiment analysis check (if enabled and news keyword passes)
+              let geminiPass = true;
+              let geminiReason = "";
+              if (preferencesRef.current.geminiSentimentFilter) {
+                if (passesCatalyst) {
+                  try {
+                    const res = await fetch('/api/news/sentiment', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        ticker: selectedGainer.symbol,
+                        headline: liveData.catalyst
+                      })
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      geminiPass = data.isPositive;
+                      geminiReason = data.reason;
+                    } else {
+                      geminiPass = false;
+                      geminiReason = `Sentiment API returned status ${res.status}`;
+                    }
+                  } catch (err: any) {
+                    geminiPass = false;
+                    geminiReason = `Sentiment check failed: ${err.message}`;
+                  }
+                } else {
+                  geminiPass = false;
+                  geminiReason = "Skipped (no valid catalyst keyword)";
+                }
+              } else {
+                geminiReason = "Bypassed (Gemini sentiment filter disabled)";
               }
 
-              // Float check
-              if (liveData.sharesOutstanding === 0 || !liveData.sharesOutstanding) {
-                addLog(`[SCANNER] $${selectedGainer.symbol} float is unknown. Skipping.`, 'scan', selectedGainer.symbol);
-                return;
+              // Bull Flag Pattern Check
+              let passesPattern = false;
+              let patternReason = "";
+              let patternResult: any = null;
+              if (Array.isArray(candles) && candles.length >= 4) {
+                const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
+                patternResult = analyzeBullFlag(sorted);
+                passesPattern = patternResult.detected;
+                patternReason = patternResult.reason || "";
+              } else {
+                patternReason = `Insufficient candles (${candles?.length || 0} candles, minimum 4 required)`;
               }
 
-              if (liveData.sharesOutstanding < 1000) {
-                addLog(`[SCANNER] $${selectedGainer.symbol} float (${formatCompact(liveData.sharesOutstanding)}) is less than 1,000 shares. Skipping.`, 'scan', selectedGainer.symbol);
-                return;
+              // Risk Management Checks (Stop Distance & R:R)
+              let passesStop = false;
+              let stopDistStr = "N/A";
+              const entryPrice = passesPattern ? patternResult.resistanceLevel : liveData.price;
+              const stopPrice = passesPattern ? patternResult.pullbackLow : 0;
+              const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
+
+              if (passesPattern) {
+                passesStop = validateStopDistance(entryPrice, stopPrice, maxStopDistance);
+                stopDistStr = `$${(entryPrice - stopPrice).toFixed(2)}`;
               }
 
-              if (!passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions)) {
-                addLog(`[SCANNER] $${selectedGainer.symbol} float ${formatCompact(liveData.sharesOutstanding)} exceeds ${formatCompact(maxFloatMillions * 1000000)} maximum. Skipping.`, 'scan', selectedGainer.symbol);
-                return;
+              let passesRR = false;
+              let rrRatioStr = "N/A";
+              let targetPrice = 0;
+              const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
+
+              if (passesPattern && passesStop) {
+                const targetResult = calculateTarget(entryPrice, stopPrice, undefined, minRewardRiskRatio);
+                if (targetResult) {
+                  passesRR = true;
+                  rrRatioStr = `${targetResult.ratio}:1`;
+                  targetPrice = targetResult.targetPrice;
+                }
               }
 
-              const floatDisplay = formatCompact(liveData.sharesOutstanding);
-              addLog(`[SCANNER] $${selectedGainer.symbol} passes baseline — Float: ${floatDisplay} | RVOL: ${liveData.rvol}x | Vol: ${liveData.volume.toLocaleString()}`, 'found', selectedGainer.symbol);
+              const allPass = passesPrice && passesGain && passesRvol && passesFloat && passesWindow && passesCatalyst && geminiPass && passesPattern && passesStop && passesRR;
 
-              // Store candidate for next steps
-              const tempTrade: SimulatedTrade = {
-                ticker: selectedGainer.symbol,
-                float: floatDisplay,
-                catalyst: liveData.catalyst || '',
-                setup: 'Pending Detection',
-                entryPrice: 0,
-                exitPrice: 0,
-                shares: 0,
-                pnl: 0,
-                target: 0,
-                stop: 0
-              };
-              await updateCurrentTrade(tempTrade);
-              changeStep(1);
+              // Format report
+              const statusChar = (pass: boolean) => pass ? '✓ PASS' : '✗ FAIL';
+              const floatDisplay = hasKnownFloat ? formatCompact(liveData.sharesOutstanding) : "Unknown";
+              const report = `[EVALUATION] Buy Entrance Checklist for $${selectedGainer.symbol}:
+----------------------------------------------------------------------
+1. Price Range:       ${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})
+2. Daily Gain:        ${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)
+3. Relative Vol:      ${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)
+4. Shares Float:      ${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})
+5. Trading Window:    ${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)
+6. News Catalyst:     ${statusChar(passesCatalyst)} (${passesCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})
+7. Gemini Sentiment:  ${statusChar(geminiPass)} (${geminiReason})
+8. Bull Flag Pattern: ${statusChar(passesPattern)} (${passesPattern ? `Detected at Resistance $${patternResult.resistanceLevel.toFixed(2)}` : patternReason})
+9. Stop Distance:     ${statusChar(passesStop)} (${stopDistStr} | Req: <=$${maxStopDistance.toFixed(2)})
+10. Risk/Reward:      ${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)
+----------------------------------------------------------------------
+Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANCE REQUIREMENTS'}`;
+
+              if (allPass) {
+                addLog(report, 'success', selectedGainer.symbol);
+
+                // Calculate shares based on position size preference
+                let computedShares = 1;
+                const psStr = (positionSizeRef.current || "1").toString().trim();
+                if (psStr.endsWith("%")) {
+                  const pct = parseFloat(psStr.replace("%", ""));
+                  const maxCashForTrade = balanceRef.current * (pct / 100);
+                  computedShares = Math.max(1, Math.floor(maxCashForTrade / entryPrice));
+                } else {
+                  computedShares = parseInt(psStr) || 1;
+                }
+
+                // Setup the trade
+                const setupTrade: SimulatedTrade = {
+                  ticker: selectedGainer.symbol,
+                  float: floatDisplay,
+                  catalyst: liveData.catalyst || '',
+                  setup: 'Bull Flag',
+                  entryPrice: parseFloat(entryPrice.toFixed(2)),
+                  shares: computedShares,
+                  target: targetPrice,
+                  stop: parseFloat(stopPrice.toFixed(2)),
+                  exitPrice: 0,
+                  pnl: 0
+                };
+
+                await updateCurrentTrade(setupTrade);
+                changeStep(1); // Proceed to catalyst validation step in UI
+              } else {
+                addLog(report, 'warn', selectedGainer.symbol);
+                await updateCurrentTrade(null);
+                // Remain on step 0
+              }
             }
             break;
 
           case 1: // CATALYST VALIDATION — Require a fundamental news driver
             if (activeTrade) {
-              const catalystResult = validateCatalyst(activeTrade.catalyst);
-
-              if (!catalystResult.valid) {
-                addLog(`[ABORT] No qualifying news catalyst for $${activeTrade.ticker}. Headline: "${activeTrade.catalyst || 'None'}". Skipping (Technical Breakout Only).`, 'warn', activeTrade.ticker);
-                await updateCurrentTrade(null);
-                changeStep(0);
-                return;
-              }
-
-              addLog(`[CATALYST] ✓ Valid keyword catalyst found for $${activeTrade.ticker}: "${catalystResult.matchedKeyword}" — "${activeTrade.catalyst}"`, 'found', activeTrade.ticker);
+              const runKeywordFallback = async (reason: string) => {
+                addLog(`[CATALYST FALLBACK] Running keyword validator for $${activeTrade.ticker} because: ${reason}`, 'info', activeTrade.ticker);
+                const catalystResult = validateCatalyst(activeTrade.catalyst);
+                if (!catalystResult.valid) {
+                  addLog(`[ABORT] No qualifying news catalyst for $${activeTrade.ticker}. Headline: "${activeTrade.catalyst || 'None'}". Skipping (Technical Breakout Only).`, 'warn', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return false;
+                }
+                addLog(`[CATALYST] ✓ Valid keyword catalyst found for $${activeTrade.ticker}: "${catalystResult.matchedKeyword}" — "${activeTrade.catalyst}"`, 'found', activeTrade.ticker);
+                return true;
+              };
 
               // Gemini Sentiment Analysis Filter
               if (preferencesRef.current.geminiSentimentFilter) {
@@ -482,15 +645,21 @@ export function ExecutionEngine({
                   }
                   const data = await res.json();
                   if (!data.isPositive) {
-                    addLog(`[ABORT] Gemini determined negative/neutral news sentiment for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                    addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
                     await updateCurrentTrade(null);
                     changeStep(0);
                     return;
                   }
-                  addLog(`[GEMINI] ✓ Positive news sentiment confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
+                  addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
                 } catch (err: any) {
-                  addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Defaulting to positive sentiment filter bypass.`, 'warn', activeTrade.ticker);
+                  addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
+                  const success = await runKeywordFallback(err.message);
+                  if (!success) return;
                 }
+              } else {
+                // If Gemini is disabled, run keyword validation directly
+                const success = await runKeywordFallback('Gemini filter is disabled');
+                if (!success) return;
               }
 
               changeStep(2);
