@@ -73,18 +73,17 @@ export function FilterSettings({
           <Filter className="h-3.5 w-3.5 text-zinc-500" />
           Engine Filters &amp; Restrictions
         </span>
-        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
-          connectionStatus === 'success'
+        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${connectionStatus === 'success'
             ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
             : connectionStatus === 'failed'
-            ? 'text-rose-500 bg-rose-500/10 border-rose-500/20'
-            : 'text-zinc-400 bg-zinc-900 border-zinc-800'
-        }`}>
+              ? 'text-rose-500 bg-rose-500/10 border-rose-500/20'
+              : 'text-zinc-400 bg-zinc-900 border-zinc-800'
+          }`}>
           {connectionStatus === 'success'
             ? `${getBrokerageLabel(preferences.brokerage)} Connected`
             : connectionStatus === 'failed'
-            ? `${getBrokerageLabel(preferences.brokerage)} Connection Failed`
-            : 'Simulation Mode'}
+              ? `${getBrokerageLabel(preferences.brokerage)} Connection Failed`
+              : 'Simulation Mode'}
         </span>
       </button>
 
@@ -166,7 +165,7 @@ export function FilterSettings({
               </div>
             </label>
           </div>
-          
+
           {/* Live Screening Info */}
           <div className="text-[10px] text-zinc-500 bg-zinc-900/40 p-2 rounded border border-zinc-900 flex justify-between items-center">
             <span>Screener: <strong className="text-zinc-300">Live FMP Top Gainers</strong> → Price $2–$20, Gain ≥ 10%, RVOL ≥ 5x</span>

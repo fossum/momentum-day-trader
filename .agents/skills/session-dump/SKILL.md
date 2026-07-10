@@ -7,15 +7,21 @@ effort: low
 # Role Modification: Context & Knowledge Preservation
 
 ## Objective
-To ensure seamless continuity across development sessions, you must generate a concise "Knowledge Dump" markdown block at the conclusion of the interaction.
+To ensure seamless continuity across development sessions, you must automatically identify, record, and persist any new code skills, constraints, API endpoints, or workflows learned during the session by updating or creating configuration files under the `.agents/` directory. You will then output a concise "Session Knowledge Dump" summary.
 
 ## Trigger Conditions
 Actively monitor the conversation for wrap-up intent. Trigger this output automatically if the user:
 - Uses closing phrases (e.g., "Thanks for the help," "That's all for today," "Done for now").
 - Explicitly invokes the `/dump` slash command.
 
+## Core Instructions
+When triggered:
+1. **Analyze Session Discoveries:** Review all changes, API integrations, and constraints discovered during the session.
+2. **Persist Agent Configs:** Check if any workspace agent configurations (such as custom skills under `.agents/skills/` or rules under `.agents/rules/`) should be created or updated to document these discoveries. If so, write/update them immediately.
+3. **Generate Summary:** Append a distinct markdown block separated by a horizontal rule (`---`) summarizing the session state.
+
 ## Output Format
-When triggered, append a distinct markdown block separated by a horizontal rule (`---`) using the following structure:
+Append a distinct markdown block separated by a horizontal rule (`---`) using the following structure:
 
 ### 🧠 SESSION KNOWLEDGE DUMP
 * **Core Objective:** (1-sentence summary of what we built or solved)

@@ -59,11 +59,31 @@ async function startServer() {
       if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
       const data = await response.json();
       
-      // Ensure changesPercentage is populated for frontend compatibility
-      const mappedData = data.map((item: any) => ({
-        ...item,
-        changesPercentage: item.changesPercentage !== undefined ? item.changesPercentage : item.changePercentage
-      }));
+      // Fetch shares float as well
+      let floatShares = 0;
+      let outstandingShares = 0;
+      try {
+        const floatRes = await fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`);
+        if (floatRes.ok) {
+          const floatData = await floatRes.json();
+          if (Array.isArray(floatData) && floatData.length > 0) {
+            floatShares = floatData[0].floatShares || 0;
+            outstandingShares = floatData[0].outstandingShares || 0;
+          }
+        }
+      } catch (e: any) {
+        console.warn(`FMP shares-float fetch failed for ${ticker}:`, e.message);
+      }
+
+      // Ensure changesPercentage and sharesOutstanding are populated for frontend compatibility
+      const mappedData = data.map((item: any) => {
+        const finalFloat = floatShares || outstandingShares || item.sharesOutstanding || 0;
+        return {
+          ...item,
+          changesPercentage: item.changesPercentage !== undefined ? item.changesPercentage : item.changePercentage,
+          sharesOutstanding: finalFloat
+        };
+      });
       
       res.json(mappedData);
     } catch (error: any) {
@@ -75,7 +95,7 @@ async function startServer() {
     try {
       const ticker = req.params.ticker.toUpperCase();
       const key = getFmpKey();
-      
+
       const brokerage = req.headers["x-brokerage"];
       const ibkrUrl = req.headers["x-ibkr-url"];
       const robinhoodToken = req.headers["x-robinhood-token"];
@@ -164,6 +184,8 @@ async function startServer() {
       // Fetch FMP news and quote as fallback / supplemental data
       let quote: any = null;
       let newsData: any[] = [];
+      let floatShares = 0;
+      let outstandingShares = 0;
       
       try {
         const quoteRes = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`);
@@ -175,6 +197,19 @@ async function startServer() {
         }
       } catch (e: any) {
         console.warn(`FMP quote fetch failed for ${ticker}:`, e.message);
+      }
+
+      try {
+        const floatRes = await fetch(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`);
+        if (floatRes.ok) {
+          const floatData = await floatRes.json();
+          if (Array.isArray(floatData) && floatData.length > 0) {
+            floatShares = floatData[0].floatShares || 0;
+            outstandingShares = floatData[0].outstandingShares || 0;
+          }
+        }
+      } catch (e: any) {
+        console.warn(`FMP shares-float fetch failed for ${ticker}:`, e.message);
       }
 
       try {
@@ -200,13 +235,15 @@ async function startServer() {
         catalyst = newsData[0].title;
       }
 
+      const finalFloat = floatShares || outstandingShares || quote?.sharesOutstanding || 0;
+
       return res.json({
         price: finalPrice,
         volume: finalVolume,
         avgVolume,
         rvol: isNaN(rvol) ? 1.0 : rvol,
         catalyst,
-        sharesOutstanding: quote?.sharesOutstanding || 0,
+        sharesOutstanding: finalFloat,
         companyName: quote?.name || ticker
       });
     } catch (error: any) {
@@ -313,7 +350,7 @@ Headline: "${headline}"`,
       const response = await fetch(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`);
       if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
       const data = await response.json();
-      
+
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
         ...item,

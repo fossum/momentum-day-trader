@@ -177,7 +177,7 @@ export function ExecutionEngine({
         exitPrice: resolvedTrade.exitPrice,
         shares: resolvedTrade.shares,
         strategy: `${resolvedTrade.setup} (Dry-Mode)`,
-        notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}. Stop Distance: $${(resolvedTrade.entryPrice - resolvedTrade.stop).toFixed(2)}. R:R: ${((resolvedTrade.target - resolvedTrade.entryPrice)/(resolvedTrade.entryPrice - resolvedTrade.stop)).toFixed(2)}.`,
+        notes: `[Simulated Dry-Mode] Setup: ${resolvedTrade.setup}. Float: ${resolvedTrade.float}. Catalyst: ${resolvedTrade.catalyst}. Target: $${resolvedTrade.target}, Stop: $${resolvedTrade.stop}. Stop Distance: $${(resolvedTrade.entryPrice - resolvedTrade.stop).toFixed(2)}. R:R: ${((resolvedTrade.target - resolvedTrade.entryPrice) / (resolvedTrade.entryPrice - resolvedTrade.stop)).toFixed(2)}.`,
         pnl: resolvedTrade.pnl,
         timestamp: serverTimestamp()
       });
@@ -375,8 +375,8 @@ export function ExecutionEngine({
               checkedSymbolsRef.current.add(selectedGainer.symbol);
 
               // Check if we have checked all checkable stocks in the list
-              const checkableGainers = currentGainers.filter(g => 
-                !blacklist.includes(g.symbol) && 
+              const checkableGainers = currentGainers.filter(g =>
+                !blacklist.includes(g.symbol) &&
                 passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)
               );
               const allChecked = checkableGainers.length === 0 || checkableGainers.every(g => checkedSymbolsRef.current.has(g.symbol));
