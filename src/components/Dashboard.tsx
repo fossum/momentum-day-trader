@@ -93,7 +93,8 @@ export function Dashboard() {
   const {
     gainers,
     loadingGainers,
-    isScannerHours
+    isScannerHours,
+    refreshGainers
   } = useMarketScanner();
 
   const {
@@ -359,6 +360,7 @@ export function Dashboard() {
               retryTrigger={retryTrigger}
               onRetryConnection={() => setRetryTrigger(prev => prev + 1)}
               gainers={gainers}
+              onRefreshGainers={refreshGainers}
               topGainersSection={
                 <MarketScanner
                   gainers={gainers}

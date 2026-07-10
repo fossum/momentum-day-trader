@@ -292,8 +292,16 @@ export function passesFloatFilter(
   sharesOutstanding: number,
   maxFloatMillions: number = 20
 ): boolean {
-  return sharesOutstanding > 0 && sharesOutstanding <= (maxFloatMillions * 1000000);
+  return sharesOutstanding >= 1000 && sharesOutstanding <= (maxFloatMillions * 1000000);
 }
+
+export const formatCompact = (num: number, locale = 'en-US'): string => {
+  return new Intl.NumberFormat(locale, {
+    notation: 'compact',
+    compactDisplay: 'short',
+    maximumFractionDigits: 1,
+  }).format(num);
+};
 
 // ---------- Trading Window ----------
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { FmpQuote, FmpNews } from '../../types';
 import { Search, Sparkles, Info } from 'lucide-react';
 import { format } from 'date-fns';
+import { formatCompact } from '../../hooks/usePatternDetector';
 
 interface StockResearchProps {
   quote: FmpQuote | null;
@@ -77,7 +78,11 @@ export function StockResearch({
             </div>
             <div className="rounded bg-zinc-900/60 p-3">
               <div className="text-zinc-500">Float (O/S)</div>
-              <div className="font-semibold text-zinc-200 text-sm mt-0.5">{(quote.sharesOutstanding / 1000000).toFixed(2)}M</div>
+              <div className="font-semibold text-zinc-200 text-sm mt-0.5">
+                {quote.sharesOutstanding && quote.sharesOutstanding > 0 
+                  ? formatCompact(quote.sharesOutstanding) 
+                  : 'Unknown'}
+              </div>
             </div>
           </div>
         </div>

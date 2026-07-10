@@ -13,7 +13,8 @@ import {
   passesBaselineFilter,
   passesRvolFilter,
   passesFloatFilter,
-  isWithinTradingWindow
+  isWithinTradingWindow,
+  formatCompact
 } from '../hooks/usePatternDetector';
 import { EngineControls } from './execution/EngineControls';
 import { FilterSettings } from './execution/FilterSettings';
@@ -29,6 +30,7 @@ interface ExecutionEngineProps {
   retryTrigger?: number;
   onRetryConnection?: () => void;
   gainers?: MarketGainer[];
+  onRefreshGainers?: () => Promise<void>;
 }
 
 export function ExecutionEngine({
@@ -39,7 +41,8 @@ export function ExecutionEngine({
   onSavePreferences,
   retryTrigger = 0,
   onRetryConnection,
-  gainers = []
+  gainers = [],
+  onRefreshGainers
 }: ExecutionEngineProps) {
   const [isActive, setIsActive] = useState(false);
   const [positionSize, setPositionSize] = useState<string>('1');
@@ -64,6 +67,7 @@ export function ExecutionEngine({
   const positionStepRef = useRef<number>(0);
   const gainersRef = useRef<MarketGainer[]>(gainers);
   const lastGainerIndexRef = useRef<number>(0);
+  const checkedSymbolsRef = useRef<Set<string>>(new Set());
   // Track the breakout entry price for bailout logic (separate from limit entry)
   const entryLivePriceRef = useRef<number>(0);
 
@@ -73,6 +77,7 @@ export function ExecutionEngine({
 
   useEffect(() => {
     gainersRef.current = gainers;
+    checkedSymbolsRef.current.clear();
   }, [gainers]);
 
   const changeStep = (newStep: number) => {
@@ -366,6 +371,22 @@ export function ExecutionEngine({
                 return;
               }
 
+              // Add symbol to checked list
+              checkedSymbolsRef.current.add(selectedGainer.symbol);
+
+              // Check if we have checked all checkable stocks in the list
+              const checkableGainers = currentGainers.filter(g => 
+                !blacklist.includes(g.symbol) && 
+                passesBaselineFilter(g.price, g.changesPercentage, minPrice, maxPrice, minGainPercent)
+              );
+              const allChecked = checkableGainers.length === 0 || checkableGainers.every(g => checkedSymbolsRef.current.has(g.symbol));
+
+              if (allChecked && onRefreshGainers) {
+                addLog('[SCANNER] Evaluated each stock in the current gainers list. Triggering refresh...', 'info');
+                checkedSymbolsRef.current.clear();
+                onRefreshGainers().catch(err => console.warn('Failed to refresh gainers:', err));
+              }
+
               addLog(`[SCANNER] Evaluating $${selectedGainer.symbol} (${selectedGainer.name}) — +${selectedGainer.changesPercentage.toFixed(1)}% at $${selectedGainer.price.toFixed(2)}`, 'scan', selectedGainer.symbol);
 
               // Fetch live data for RVOL and catalyst
@@ -395,19 +416,28 @@ export function ExecutionEngine({
               }
 
               // Float check
-              if (!passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions)) {
-                const floatInM = (liveData.sharesOutstanding / 1000000).toFixed(1);
-                addLog(`[SCANNER] $${selectedGainer.symbol} float ${floatInM}M exceeds ${maxFloatMillions}M maximum. Skipping.`, 'scan', selectedGainer.symbol);
+              if (liveData.sharesOutstanding === 0 || !liveData.sharesOutstanding) {
+                addLog(`[SCANNER] $${selectedGainer.symbol} float is unknown. Skipping.`, 'scan', selectedGainer.symbol);
                 return;
               }
 
-              const floatDisplay = (liveData.sharesOutstanding / 1000000).toFixed(1) + 'M';
+              if (liveData.sharesOutstanding < 1000) {
+                addLog(`[SCANNER] $${selectedGainer.symbol} float (${formatCompact(liveData.sharesOutstanding)}) is less than 1,000 shares. Skipping.`, 'scan', selectedGainer.symbol);
+                return;
+              }
+
+              if (!passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions)) {
+                addLog(`[SCANNER] $${selectedGainer.symbol} float ${formatCompact(liveData.sharesOutstanding)} exceeds ${formatCompact(maxFloatMillions * 1000000)} maximum. Skipping.`, 'scan', selectedGainer.symbol);
+                return;
+              }
+
+              const floatDisplay = formatCompact(liveData.sharesOutstanding);
               addLog(`[SCANNER] $${selectedGainer.symbol} passes baseline — Float: ${floatDisplay} | RVOL: ${liveData.rvol}x | Vol: ${liveData.volume.toLocaleString()}`, 'found', selectedGainer.symbol);
 
               // Store candidate for next steps
               const tempTrade: SimulatedTrade = {
                 ticker: selectedGainer.symbol,
-                float: 'Live',
+                float: floatDisplay,
                 catalyst: liveData.catalyst || '',
                 setup: 'Pending Detection',
                 entryPrice: 0,

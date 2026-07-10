@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { MarketGainer } from '../types';
 
 export function isMarketScannerActive(): boolean {
@@ -48,39 +48,40 @@ export function useMarketScanner() {
   const [loadingGainers, setLoadingGainers] = useState(false);
   const [isScannerHours, setIsScannerHours] = useState(isMarketScannerActive());
 
+  const fetchGainers = useCallback(async () => {
+    const active = isMarketScannerActive();
+    setIsScannerHours(active);
+    
+    if (!active) {
+      setLoadingGainers(false);
+      return;
+    }
+
+    setLoadingGainers(true);
+    try {
+      const res = await fetch('/api/market/gainers');
+      if (res.ok) {
+        const data = await res.json();
+        setGainers(Array.isArray(data) ? data.slice(0, 15) : []);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch gainers:', err);
+    } finally {
+      setLoadingGainers(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const fetchGainers = async () => {
-      const active = isMarketScannerActive();
-      setIsScannerHours(active);
-      
-      if (!active) {
-        setLoadingGainers(false);
-        return;
-      }
-
-      setLoadingGainers(true);
-      try {
-        const res = await fetch('/api/market/gainers');
-        if (res.ok) {
-          const data = await res.json();
-          setGainers(Array.isArray(data) ? data.slice(0, 15) : []);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch gainers:', err);
-      } finally {
-        setLoadingGainers(false);
-      }
-    };
-
     fetchGainers();
     // Poll every 30 seconds for new top gainers
     const interval = setInterval(fetchGainers, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchGainers]);
 
   return {
     gainers,
     loadingGainers,
-    isScannerHours
+    isScannerHours,
+    refreshGainers: fetchGainers
   };
 }
