@@ -11,6 +11,37 @@ dotenv.config();
 // Disable TLS verification for IBKR Client Portal Gateway self-signed certs
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
+// Helper to get Eastern ISO string format
+function getEasternISOString(date: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(date);
+  const partMap = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  let hour = partMap.hour;
+  if (hour === '24') hour = '00';
+  
+  const ms = String(date.getMilliseconds()).padStart(3, '0');
+  
+  const tzFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'longOffset'
+  });
+  const tzParts = tzFormatter.formatToParts(date);
+  const tzName = tzParts.find(p => p.type === 'timeZoneName')?.value || 'GMT-04:00';
+  const offset = tzName.replace('GMT', '');
+  
+  return `${partMap.year}-${partMap.month}-${partMap.day}T${hour}:${partMap.minute}:${partMap.second}.${ms}${offset}`;
+}
+
 // Local logging helper for user decisions
 function logUserDecision(userId: string | undefined, message: string, level: string = "INFO") {
   if (!userId) return;
@@ -27,7 +58,7 @@ function logUserDecision(userId: string | undefined, message: string, level: str
       fs.mkdirSync(logsDir, { recursive: true });
     }
     const logFilePath = path.join(logsDir, `${userId}.log`);
-    const timestamp = new Date().toISOString();
+    const timestamp = getEasternISOString();
     const formattedMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`;
     fs.appendFileSync(logFilePath, formattedMessage);
   } catch (error) {

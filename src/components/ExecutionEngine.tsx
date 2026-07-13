@@ -118,7 +118,7 @@ export function ExecutionEngine({
       id: Math.random().toString(36).substring(2, 9),
       text,
       type,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      time: new Date().toLocaleTimeString([], { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       ticker
     };
     setLogs((prev) => [...prev.slice(-49), newLog]); // Keep last 50 logs
