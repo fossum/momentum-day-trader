@@ -88,5 +88,16 @@ service cloud.firestore {
         && isValidExecutionState(incoming());
       allow delete: if isOwner(userId);
     }
+
+    match /newsSentiment/{newsId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && isValidId(newsId)
+        && incoming().ticker is string
+        && incoming().headline is string
+        && incoming().isPositive is bool
+        && incoming().reason is string
+        && (incoming().timestamp == request.time || incoming().timestamp == null);
+    }
   }
 }

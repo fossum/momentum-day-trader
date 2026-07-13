@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { auth, db } from '../lib/firebase';
+import { auth, db, getCachedSentiment, cacheSentiment } from '../lib/firebase';
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { UserPreferences, LogMessage, SimulatedTrade, MarketGainer } from '../types';
@@ -434,8 +434,8 @@ export function ExecutionEngine({
               checkedSymbolsRef.current.add(selectedGainer.symbol);
 
               // Check if we checked all the checkable gainers
-              const checkableGainers = currentGainers.filter(g => 
-                !blacklist.includes(g.symbol) && 
+              const checkableGainers = currentGainers.filter(g =>
+                !blacklist.includes(g.symbol) &&
                 (!checkPriceRange || (g.price >= minPrice && g.price <= maxPrice)) &&
                 (!checkDailyGain || (g.changesPercentage >= minGainPercent))
               );
@@ -510,21 +510,31 @@ export function ExecutionEngine({
                 const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
                 if (checkNewsCatalyst ? passesCatalyst : hasActualNews) {
                   try {
-                    const res = await fetch('/api/news/sentiment', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        ticker: selectedGainer.symbol,
-                        headline: liveData.catalyst
-                      })
-                    });
-                    if (res.ok) {
-                      const data = await res.json();
-                      geminiPass = data.isPositive;
-                      geminiReason = data.reason;
+                    const cached = await getCachedSentiment(selectedGainer.symbol, liveData.catalyst);
+                    if (cached) {
+                      geminiPass = cached.isPositive;
+                      geminiReason = cached.reason + " (Cached)";
                     } else {
-                      geminiPass = false;
-                      geminiReason = `Sentiment API returned status ${res.status}`;
+                      const res = await fetch('/api/news/sentiment', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          ticker: selectedGainer.symbol,
+                          headline: liveData.catalyst
+                        })
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        geminiPass = data.isPositive;
+                        geminiReason = data.reason;
+                        await cacheSentiment(selectedGainer.symbol, liveData.catalyst, {
+                          isPositive: geminiPass,
+                          reason: geminiReason
+                        });
+                      } else {
+                        geminiPass = false;
+                        geminiReason = `Sentiment API returned status ${res.status}`;
+                      }
                     }
                   } catch (err: any) {
                     geminiPass = false;
@@ -691,25 +701,44 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 if (checkNewsCatalyst ? catalystValid : hasActualNews) {
                   addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
                   try {
-                    const res = await fetch('/api/news/sentiment', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        ticker: activeTrade.ticker,
-                        headline: activeTrade.catalyst
-                      })
-                    });
-                    if (!res.ok) {
-                      throw new Error(`Server returned status ${res.status}`);
+                    const cached = await getCachedSentiment(activeTrade.ticker, activeTrade.catalyst);
+                    if (cached) {
+                      if (!cached.isPositive) {
+                        addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker} (Cached). Reason: "${cached.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                        await updateCurrentTrade(null);
+                        changeStep(0);
+                        return;
+                      }
+                      addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker} (Cached): "${cached.reason}"`, 'success', activeTrade.ticker);
+                    } else {
+                      const res = await fetch('/api/news/sentiment', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          ticker: activeTrade.ticker,
+                          headline: activeTrade.catalyst
+                        })
+                      });
+                      if (!res.ok) {
+                        throw new Error(`Server returned status ${res.status}`);
+                      }
+                      const data = await res.json();
+                      if (!data.isPositive) {
+                        addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                        await cacheSentiment(activeTrade.ticker, activeTrade.catalyst, {
+                          isPositive: false,
+                          reason: data.reason
+                        });
+                        await updateCurrentTrade(null);
+                        changeStep(0);
+                        return;
+                      }
+                      addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
+                      await cacheSentiment(activeTrade.ticker, activeTrade.catalyst, {
+                        isPositive: true,
+                        reason: data.reason
+                      });
                     }
-                    const data = await res.json();
-                    if (!data.isPositive) {
-                      addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
-                      await updateCurrentTrade(null);
-                      changeStep(0);
-                      return;
-                    }
-                    addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
                   } catch (err: any) {
                     addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
                     const success = await runKeywordFallback(err.message);
@@ -798,7 +827,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
               // Calculate target with configured R:R minimum
               let targetPrice = entryPrice * 1.04; // default target
               let targetRatioStr = "Bypassed";
-              
+
               if (checkRiskReward) {
                 const targetResult = calculateTarget(entryPrice, finalStopPrice, undefined, minRewardRiskRatio);
                 if (!targetResult) {
