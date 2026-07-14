@@ -28,6 +28,7 @@ const CATALYST_KEYWORDS = [
 ];
 
 const MAX_STOP_DISTANCE = 0.20;
+const MIN_STOP_DISTANCE = 0.05;
 const MIN_REWARD_RISK_RATIO = 2.0;
 
 function calculate9EMA(candles, period = 9) {
@@ -88,7 +89,35 @@ function isMicroGreenOrDoji(c) {
   return body <= 0.02 || relativeBody <= 0.002;
 }
 
-function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFlagpoleRedCandles = 1, maxPullbackGreenCandles = 1) {
+function findNextResistance(candles, flagpoleStartIdx, entryPrice) {
+  const priorCandles = candles.slice(0, flagpoleStartIdx);
+  if (priorCandles.length === 0) return undefined;
+
+  const peaks = [];
+  
+  // Find local peaks in prior candles (maximum of 3-candle window)
+  for (let i = 1; i < priorCandles.length - 1; i++) {
+    const cur = priorCandles[i].high;
+    const prev = priorCandles[i - 1].high;
+    const next = priorCandles[i + 1].high;
+    if (cur > prev && cur >= next) {
+      peaks.push(cur);
+    }
+  }
+
+  // Also include the absolute daily high of the prior candles
+  const absoluteHigh = Math.max(...priorCandles.map(c => c.high));
+  if (absoluteHigh > entryPrice && !peaks.includes(absoluteHigh)) {
+    peaks.push(absoluteHigh);
+  }
+
+  const validTargets = peaks.filter(p => p > entryPrice);
+  if (validTargets.length === 0) return undefined;
+
+  return Math.min(...validTargets);
+}
+
+function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFlagpoleRedCandles = 1, maxPullbackGreenCandles = 1, minStopDistance = MIN_STOP_DISTANCE) {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
   const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
@@ -150,6 +179,11 @@ function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFla
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
 
+        // Reject negative, zero, or too narrow stops
+        if (resistanceLevel - pullbackLow < minStopDistance) {
+          continue;
+        }
+
         // Proximity Check
         const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
         const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
@@ -157,12 +191,15 @@ function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFla
           continue;
         }
 
+        const nextResistance = findNextResistance(candles, flagpoleStart, resistanceLevel);
+
         return {
           detected: true,
           resistanceLevel,
           pullbackLow,
           flagpoleCandles,
-          pullbackCandles
+          pullbackCandles,
+          nextResistance
         };
       }
     }
@@ -171,16 +208,16 @@ function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFla
   return null;
 }
 
-function validateStopDistance(entryPrice, pullbackLow) {
+function validateStopDistance(entryPrice, pullbackLow, maxStopDistance = MAX_STOP_DISTANCE, minStopDistance = MIN_STOP_DISTANCE) {
   const stopDistance = Number((entryPrice - pullbackLow).toFixed(2));
-  return stopDistance > 0 && stopDistance <= MAX_STOP_DISTANCE;
+  return stopDistance >= minStopDistance && stopDistance <= maxStopDistance;
 }
 
-function calculateTarget(entryPrice, stopPrice, resistanceLevel) {
+function calculateTarget(entryPrice, stopPrice, resistanceLevel, minRewardRiskRatio = MIN_REWARD_RISK_RATIO, minStopDistance = MIN_STOP_DISTANCE) {
   const stopDistance = entryPrice - stopPrice;
-  if (stopDistance <= 0) return null;
+  if (stopDistance < minStopDistance) return null;
 
-  const minTarget = entryPrice + stopDistance * MIN_REWARD_RISK_RATIO;
+  const minTarget = entryPrice + stopDistance * minRewardRiskRatio;
 
   if (resistanceLevel !== undefined && resistanceLevel >= minTarget) {
     const ratio = (resistanceLevel - entryPrice) / stopDistance;
@@ -189,7 +226,7 @@ function calculateTarget(entryPrice, stopPrice, resistanceLevel) {
 
   return {
     targetPrice: parseFloat(minTarget.toFixed(2)),
-    ratio: MIN_REWARD_RISK_RATIO
+    ratio: minRewardRiskRatio
   };
 }
 
@@ -473,6 +510,21 @@ async function runTests() {
     assert(validateStopDistance(5.00, 5.10) === false, 'Rejects stop above entry price');
   }
 
+  {
+    // Test 17.1: Zero-dollar stop distance ($0.00)
+    assert(validateStopDistance(5.00, 5.00) === false, 'Rejects zero stop distance');
+  }
+
+  {
+    // Test 17.2: Stop distance too narrow ($0.01)
+    assert(validateStopDistance(5.00, 4.99) === false, 'Rejects $0.01 stop distance (below minimum)');
+  }
+
+  {
+    // Test 17.3: Exactly $0.05 stop distance (boundary)
+    assert(validateStopDistance(5.00, 4.95) === true, 'Accepts $0.05 stop distance (boundary)');
+  }
+
   // ----- Target / R:R Calculation Tests -----
   console.log('\n--- Target & R:R Calculation ---');
 
@@ -509,6 +561,12 @@ async function runTests() {
     // Test 21: Invalid setup (stop above entry)
     const result = calculateTarget(5.00, 5.10);
     assert(result === null, 'Returns null for invalid stop (above entry)');
+  }
+
+  {
+    // Test 21.1: Invalid setup (stop distance too narrow $0.01)
+    const result = calculateTarget(5.00, 4.99);
+    assert(result === null, 'Returns null for stop distance below minimum');
   }
 
   // ----- Baseline Filter Tests -----

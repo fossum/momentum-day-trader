@@ -46,12 +46,51 @@ function isMicroGreenOrDoji(c: Candle): boolean {
   return body <= 0.02 || relativeBody <= 0.002;
 }
 
+/**
+ * Find the next resistance level from the candles list before the flagpole start.
+ * Scans for local peaks above the entry price.
+ */
+export function findNextResistance(
+  candles: Candle[],
+  flagpoleStartIdx: number,
+  entryPrice: number
+): number | undefined {
+  const priorCandles = candles.slice(0, flagpoleStartIdx);
+  if (priorCandles.length === 0) return undefined;
+
+  const peaks: number[] = [];
+  
+  // Find local peaks in prior candles (maximum of 3-candle window)
+  for (let i = 1; i < priorCandles.length - 1; i++) {
+    const cur = priorCandles[i].high;
+    const prev = priorCandles[i - 1].high;
+    const next = priorCandles[i + 1].high;
+    if (cur > prev && cur >= next) {
+      peaks.push(cur);
+    }
+  }
+
+  // Also include the absolute daily high of the prior candles
+  const absoluteHigh = Math.max(...priorCandles.map(c => c.high));
+  if (absoluteHigh > entryPrice && !peaks.includes(absoluteHigh)) {
+    peaks.push(absoluteHigh);
+  }
+
+  // Filter peaks that are strictly above the entry price
+  const validTargets = peaks.filter(p => p > entryPrice);
+  if (validTargets.length === 0) return undefined;
+
+  // Find the closest peak above the entry price
+  return Math.min(...validTargets);
+}
+
 export function detectBullFlag(
   candles: Candle[],
   currentPrice?: number,
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
-  maxPullbackGreenCandles: number = 1
+  maxPullbackGreenCandles: number = 1,
+  minStopDistance: number = 0.05
 ): BullFlagResult | null {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -129,6 +168,11 @@ export function detectBullFlag(
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
 
+        // Reject negative, zero, or too small stops
+        if (resistanceLevel - pullbackLow < minStopDistance) {
+          continue;
+        }
+
         // Proximity Check
         const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
         const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
@@ -136,12 +180,15 @@ export function detectBullFlag(
           continue;
         }
 
+        const nextResistance = findNextResistance(candles, flagpoleStart, resistanceLevel);
+
         return {
           detected: true,
           resistanceLevel,
           pullbackLow,
           flagpoleCandles,
-          pullbackCandles
+          pullbackCandles,
+          nextResistance
         };
       }
     }
@@ -160,7 +207,8 @@ export function analyzeBullFlag(
   currentPrice?: number,
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
-  maxPullbackGreenCandles: number = 1
+  maxPullbackGreenCandles: number = 1,
+  minStopDistance: number = 0.05
 ): BullFlagDiagnostic {
   if (candles.length === 0) return { detected: false, reason: "No candle data" };
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -173,14 +221,15 @@ export function analyzeBullFlag(
   const emaValues = calculate9EMA(candles);
 
   // First, try standard detection
-  const standardResult = detectBullFlag(candles, currentPrice, maxProximityPercent, maxFlagpoleRedCandles, maxPullbackGreenCandles);
+  const standardResult = detectBullFlag(candles, currentPrice, maxProximityPercent, maxFlagpoleRedCandles, maxPullbackGreenCandles, minStopDistance);
   if (standardResult) {
     return {
       detected: true,
       resistanceLevel: standardResult.resistanceLevel,
       pullbackLow: standardResult.pullbackLow,
       flagpoleCandles: standardResult.flagpoleCandles,
-      pullbackCandles: standardResult.pullbackCandles
+      pullbackCandles: standardResult.pullbackCandles,
+      nextResistance: standardResult.nextResistance
     };
   }
 
@@ -257,10 +306,16 @@ export function analyzeBullFlag(
                 failureReason = `Pullback average volume is too high (${(volRatio * 100).toFixed(0)}% of flagpole vol, required < 50%)`;
               } else {
                 const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
-                const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
-                const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
-                if (pctDiff > (maxProximityPercent / 100)) {
-                  failureReason = `Proximity check failed: price $${priceToCheck.toFixed(2)} is ${(pctDiff * 100).toFixed(2)}% away from resistance $${resistanceLevel.toFixed(2)} (max ${maxProximityPercent.toFixed(1)}%)`;
+                const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
+                const stopDist = resistanceLevel - pullbackLow;
+                if (stopDist < minStopDistance) {
+                  failureReason = `Stop distance ($${stopDist.toFixed(2)}) is less than minimum stop-loss guardrail ($${minStopDistance.toFixed(2)})`;
+                } else {
+                  const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+                  const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+                  if (pctDiff > (maxProximityPercent / 100)) {
+                    failureReason = `Proximity check failed: price $${priceToCheck.toFixed(2)} is ${(pctDiff * 100).toFixed(2)}% away from resistance $${resistanceLevel.toFixed(2)} (max ${maxProximityPercent.toFixed(1)}%)`;
+                  }
                 }
               }
             } else {

@@ -13,6 +13,7 @@ export interface BullFlagResult {
   pullbackLow: number;
   flagpoleCandles: Candle[];
   pullbackCandles: Candle[];
+  nextResistance?: number;
 }
 
 export interface BullFlagDiagnostic {
@@ -22,6 +23,7 @@ export interface BullFlagDiagnostic {
   pullbackLow?: number;
   flagpoleCandles?: Candle[];
   pullbackCandles?: Candle[];
+  nextResistance?: number;
 }
 
 export interface CatalystResult {

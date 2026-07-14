@@ -44,6 +44,7 @@ export function SettingsModal({
       minRvol: 5.0,
       maxFloatMillions: 20,
       maxStopDistance: 0.20,
+      minStopDistance: 0.05,
       minRewardRiskRatio: 2.0,
       maxProximityPercent: 2.0,
       simulationSpeed: 6000,
@@ -180,6 +181,16 @@ export function SettingsModal({
               </div>
 
               <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min Stop Dist ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={preferences.minStopDistance ?? 0.05}
+                    onChange={(e) => setPreferences({ ...preferences, minStopDistance: parseFloat(e.target.value) || 0.05 })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
                 <div>
                   <label className="block text-xs text-zinc-500 mb-1">Max Proximity (%)</label>
                   <input

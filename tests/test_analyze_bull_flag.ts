@@ -473,4 +473,171 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
   }
 }
 
+// 11. Test case: Pullback low above resistance (backward stop-loss)
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  });
+
+  // Pullback: with low above resistance (11.2)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.3,
+    high: 11.4,
+    low: 11.25, // above flagpole peak 11.2
+    close: 11.3,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 11.3,
+    high: 11.4,
+    low: 11.25, // above flagpole peak 11.2
+    close: 11.3,
+    volume: 2000
+  });
+
+  const result = analyzeBullFlag(candles, undefined, 6.0, 1, 1, 0.05);
+  if (!result.detected && result.reason?.includes("Stop distance") && result.reason?.includes("less than minimum stop-loss")) {
+    console.log("✅ Case 11: Pullback low above resistance (backward stop) rejected & diagnosed passed.");
+  } else {
+    console.error("❌ Case 11: Pullback low above resistance (backward stop) failure.", result);
+  }
+}
+
+// 12. Test case: Pullback low too close to resistance ($0.01 stop distance)
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  });
+
+  // Pullback: low at 11.19 (stop distance $0.01 from resistance 11.2)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.2,
+    high: 11.2,
+    low: 11.19,
+    close: 11.2,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 11.2,
+    high: 11.2,
+    low: 11.19,
+    close: 11.2,
+    volume: 2000
+  });
+
+  const result = analyzeBullFlag(candles, undefined, 6.0, 1, 1, 0.05);
+  if (!result.detected && result.reason?.includes("Stop distance") && result.reason?.includes("less than minimum stop-loss")) {
+    console.log("✅ Case 12: Pullback low too close to resistance (too narrow stop) rejected & diagnosed passed.");
+  } else {
+    console.error("❌ Case 12: Pullback low too close to resistance (too narrow stop) failure.", result);
+  }
+}
+
+// 13. Test case: Next resistance identification and dynamic target calculation
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Set an older peak at 11.5
+  candles.push({
+    date: '2026-07-10T09:35:00-04:00',
+    open: 10.0,
+    high: 11.5, // previous peak high
+    low: 9.9,
+    close: 10.4,
+    volume: 5000
+  });
+  
+  // Some flat candles
+  for (let i = 36; i <= 39; i++) {
+    candles.push({
+      date: `2026-07-10T09:${i}:00-04:00`,
+      open: 10.4,
+      high: 10.4,
+      low: 10.3,
+      close: 10.3,
+      volume: 1000
+    });
+  }
+
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.3,
+    high: 10.8,
+    low: 10.3,
+    close: 10.7,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.7,
+    high: 11.2, // current flagpole peak (resistance level)
+    low: 10.6,
+    close: 11.1,
+    volume: 15000
+  });
+
+  // Pullback
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.1,
+    high: 11.1,
+    low: 10.8,
+    close: 10.9,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 10.9,
+    high: 10.9,
+    low: 10.8, // pullback low
+    close: 10.8,
+    volume: 2000
+  });
+
+  const result = analyzeBullFlag(candles, undefined, 6.0, 1, 1, 0.05);
+  if (result.detected && result.nextResistance === 11.5) {
+    console.log("✅ Case 13: Next resistance level identified correctly.");
+  } else {
+    console.error("❌ Case 13: Next resistance level identification failure.", result);
+  }
+}
+
 console.log("==================================================");
+

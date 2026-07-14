@@ -1,17 +1,19 @@
 export const MAX_STOP_DISTANCE_DEFAULT = 0.20;
+export const MIN_STOP_DISTANCE_DEFAULT = 0.05;
 export const MIN_REWARD_RISK_RATIO_DEFAULT = 2.0;
 
 /**
  * Validate the stop distance is within the maximum.
- * Returns true if the trade is acceptable, false if the stop is too wide.
+ * Returns true if the trade is acceptable, false if the stop is too wide or too narrow.
  */
 export function validateStopDistance(
   entryPrice: number,
   pullbackLow: number,
-  maxStopDistance: number = MAX_STOP_DISTANCE_DEFAULT
+  maxStopDistance: number = MAX_STOP_DISTANCE_DEFAULT,
+  minStopDistance: number = MIN_STOP_DISTANCE_DEFAULT
 ): boolean {
   const stopDistance = Number((entryPrice - pullbackLow).toFixed(2));
-  return stopDistance > 0 && stopDistance <= maxStopDistance;
+  return stopDistance >= minStopDistance && stopDistance <= maxStopDistance;
 }
 
 /**
@@ -25,10 +27,11 @@ export function calculateTarget(
   entryPrice: number,
   stopPrice: number,
   resistanceLevel?: number,
-  minRewardRiskRatio: number = MIN_REWARD_RISK_RATIO_DEFAULT
+  minRewardRiskRatio: number = MIN_REWARD_RISK_RATIO_DEFAULT,
+  minStopDistance: number = MIN_STOP_DISTANCE_DEFAULT
 ): { targetPrice: number; ratio: number } | null {
   const stopDistance = entryPrice - stopPrice;
-  if (stopDistance <= 0) return null;
+  if (stopDistance < minStopDistance) return null;
 
   const minTarget = entryPrice + stopDistance * minRewardRiskRatio;
 

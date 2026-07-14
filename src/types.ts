@@ -81,6 +81,7 @@ export interface UserPreferences {
   minRvol?: number;
   maxFloatMillions?: number;
   maxStopDistance?: number;
+  minStopDistance?: number;
   minRewardRiskRatio?: number;
   maxProximityPercent?: number;
   simulationSpeed?: number;
