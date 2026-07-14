@@ -13,6 +13,19 @@ interface CacheEntry<T> {
 
 const memoryCache = new Map<string, CacheEntry<any>>();
 
+// Prune expired cache entries every 5 minutes to prevent memory leaks
+const cacheCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of memoryCache.entries()) {
+    if (now >= entry.expiry) {
+      memoryCache.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+if (cacheCleanupInterval && typeof cacheCleanupInterval.unref === 'function') {
+  cacheCleanupInterval.unref();
+}
+
 async function fetchWithCache<T>(url: string, ttlMs: number, headers?: any): Promise<T> {
   const cached = memoryCache.get(url);
   if (cached && Date.now() < cached.expiry) {
@@ -76,8 +89,8 @@ function decompose5MinTo1Min(fiveMinCandles: any[]): any[] {
       prices.push(close);
     }
 
-    for (let m = 4; m >= 0; m--) {
-      const candleDate = new Date(baseDate.getTime() - (4 - m) * 60000);
+    for (let m = 0; m < 5; m++) {
+      const candleDate = new Date(baseDate.getTime() + m * 60000);
 
       const cYear = candleDate.getFullYear();
       const cMonth = String(candleDate.getMonth() + 1).padStart(2, '0');

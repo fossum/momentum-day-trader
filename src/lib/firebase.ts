@@ -16,14 +16,25 @@ export const auth = getAuth(app);
 // Use the specific databaseId for AI Studio
 export const db = getFirestore(app, "ai-studio-ebb825e0-d58e-4b6d-b706-1ca47c3b3065");
 
-// Helper to compute a SHA-256 hash of a string on the client-side
 async function computeHash(text: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text.trim().toLowerCase());
-  const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  return hashHex;
+  const normalized = text.trim().toLowerCase();
+
+  // If window.crypto and window.crypto.subtle are available (secure context), use SHA-256
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(normalized);
+    const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Fallback: Pure JS implementation of FNV-1a (32-bit) hashing algorithm
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export interface SentimentResult {

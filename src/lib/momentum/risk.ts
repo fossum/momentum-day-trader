@@ -31,7 +31,7 @@ export function calculateTarget(
   minStopDistance: number = MIN_STOP_DISTANCE_DEFAULT
 ): { targetPrice: number; ratio: number } | null {
   const stopDistance = entryPrice - stopPrice;
-  if (stopDistance < minStopDistance) return null;
+  if (isNaN(stopDistance) || stopDistance < minStopDistance) return null;
 
   const minTarget = entryPrice + stopDistance * minRewardRiskRatio;
 
