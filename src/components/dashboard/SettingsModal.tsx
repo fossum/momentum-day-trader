@@ -276,7 +276,7 @@ export function SettingsModal({
                       onChange={() => setPreferences({ ...preferences, catalystValidation: 'gemini' })}
                       className="h-4 w-4 border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
                     />
-                    <span>Gemini Sentiment (Requires keyword match first)</span>
+                    <span>Gemini Sentiment</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
                     <input

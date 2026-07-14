@@ -503,7 +503,7 @@ export function ExecutionEngine({
               const checkRiskReward = preferencesRef.current.checkRiskReward ?? true;
 
               const catalystValidation = preferencesRef.current.catalystValidation ?? 'gemini';
-              const checkNewsCatalyst = catalystValidation === 'keywords' || catalystValidation === 'gemini';
+              const checkNewsCatalyst = catalystValidation === 'keywords';
               const checkGeminiSentiment = catalystValidation === 'gemini';
 
               const passesPrice = !checkPriceRange || (liveData.price >= minPrice && liveData.price <= maxPrice);
@@ -516,12 +516,12 @@ export function ExecutionEngine({
               const catalystResult = validateCatalyst(liveData.catalyst);
               const passesCatalyst = !checkNewsCatalyst || catalystResult.valid;
 
-              // Gemini news sentiment analysis check (if enabled and news keyword passes, or news catalyst check is disabled but we have news)
+              // Gemini news sentiment analysis check (if enabled and we have news to check)
               let geminiPass = true;
               let geminiReason = "";
               if (checkGeminiSentiment) {
                 const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
-                if (checkNewsCatalyst ? passesCatalyst : hasActualNews) {
+                if (hasActualNews) {
                   try {
                     const cached = await getCachedSentiment(selectedGainer.symbol, liveData.catalyst);
                     if (cached) {
@@ -554,13 +554,8 @@ export function ExecutionEngine({
                     geminiReason = `Sentiment check failed: ${err.message}`;
                   }
                 } else {
-                  if (checkNewsCatalyst) {
-                    geminiPass = false;
-                    geminiReason = "Skipped (no valid catalyst keyword)";
-                  } else {
-                    geminiPass = true;
-                    geminiReason = "Bypassed (no news catalyst to check)";
-                  }
+                  geminiPass = false;
+                  geminiReason = "Skipped (no news catalyst found)";
                 }
               } else {
                 geminiReason = "Bypassed (Gemini sentiment filter disabled)";
@@ -680,7 +675,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
           case 1: // CATALYST VALIDATION — Require a fundamental news driver
             if (activeTrade) {
               const catalystValidation = preferencesRef.current.catalystValidation ?? 'gemini';
-              const checkNewsCatalyst = catalystValidation === 'keywords' || catalystValidation === 'gemini';
+              const checkNewsCatalyst = catalystValidation === 'keywords';
               const checkGeminiSentiment = catalystValidation === 'gemini';
 
               if (!checkNewsCatalyst && !checkGeminiSentiment) {
@@ -690,7 +685,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
               }
 
               const runKeywordFallback = async (reason: string) => {
-                if (!checkNewsCatalyst) {
+                if (catalystValidation === 'bypassed') {
                   addLog(`[CATALYST] Bypassed keyword validator for $${activeTrade.ticker} (News Catalyst filter disabled)`, 'info', activeTrade.ticker);
                   return true;
                 }
@@ -709,9 +704,8 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
               // Gemini Sentiment Analysis Filter
               if (checkGeminiSentiment) {
                 const hasActualNews = activeTrade.catalyst && !activeTrade.catalyst.startsWith("No recent fundamental catalyst");
-                const catalystValid = checkNewsCatalyst ? validateCatalyst(activeTrade.catalyst).valid : true;
 
-                if (checkNewsCatalyst ? catalystValid : hasActualNews) {
+                if (hasActualNews) {
                   addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
                   try {
                     const cached = await getCachedSentiment(activeTrade.ticker, activeTrade.catalyst);
@@ -758,8 +752,10 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                     if (!success) return;
                   }
                 } else {
-                  const success = await runKeywordFallback(checkNewsCatalyst ? 'no valid catalyst keyword' : 'no news to check');
-                  if (!success) return;
+                  addLog(`[ABORT] No news catalyst found for $${activeTrade.ticker}. Skipping trade.`, 'warn', activeTrade.ticker);
+                  await updateCurrentTrade(null);
+                  changeStep(0);
+                  return;
                 }
               } else {
                 const success = await runKeywordFallback('Gemini filter is disabled');

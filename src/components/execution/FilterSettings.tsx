@@ -156,7 +156,7 @@ export function FilterSettings({
                 onChange={handleCatalystValidationChange}
                 className="w-full rounded border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-white focus:border-purple-500 focus:outline-none cursor-pointer"
               >
-                <option value="gemini">Gemini Sentiment (Requires Keywords)</option>
+                <option value="gemini">Gemini Sentiment</option>
                 <option value="keywords">Keywords Only</option>
                 <option value="bypassed">Bypassed (Technical Breakout Only)</option>
               </select>
