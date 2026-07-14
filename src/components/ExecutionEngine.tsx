@@ -640,18 +640,79 @@ export function ExecutionEngine({
               // Format report
               const statusChar = (pass: boolean) => pass ? '✓ PASS' : '✗ FAIL';
               const floatDisplay = hasKnownFloat ? formatCompact(liveData.sharesOutstanding) : "Unknown";
+
+              const checklistItems: { label: string; details: string }[] = [];
+
+              if (checkPriceRange) {
+                checklistItems.push({
+                  label: "Price Range",
+                  details: `${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})`
+                });
+              }
+              if (checkDailyGain) {
+                checklistItems.push({
+                  label: "Daily Gain",
+                  details: `${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)`
+                });
+              }
+              if (checkRelativeVol) {
+                checklistItems.push({
+                  label: "Relative Vol",
+                  details: `${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)`
+                });
+              }
+              if (checkSharesFloat) {
+                checklistItems.push({
+                  label: "Shares Float",
+                  details: `${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})`
+                });
+              }
+              if (checkTradingWindow) {
+                checklistItems.push({
+                  label: "Trading Window",
+                  details: `${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)`
+                });
+              }
+              if (checkNewsCatalyst) {
+                checklistItems.push({
+                  label: "News Catalyst",
+                  details: `${statusChar(passesCatalyst)} (${passesCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})`
+                });
+              }
+              if (checkGeminiSentiment) {
+                checklistItems.push({
+                  label: "Gemini Sentiment",
+                  details: `${statusChar(geminiPass)} (${geminiReason})`
+                });
+              }
+              if (checkBullFlagPattern) {
+                checklistItems.push({
+                  label: "Bull Flag Pattern",
+                  details: `${statusChar(passesPattern)} (${passesPattern ? `Detected at Resistance $${patternResult?.resistanceLevel?.toFixed(2)}` : patternReason})`
+                });
+              }
+              if (checkStopDistance) {
+                checklistItems.push({
+                  label: "Stop Distance",
+                  details: `${statusChar(passesStop)} (${stopDistStr} | Req: $${minStopDistance.toFixed(2)}-$${maxStopDistance.toFixed(2)})`
+                });
+              }
+              if (checkRiskReward) {
+                checklistItems.push({
+                  label: "Risk/Reward",
+                  details: `${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)`
+                });
+              }
+
+              const formattedLines = checklistItems.map((item, index) => {
+                const prefix = `${index + 1}. ${item.label}:`;
+                const paddedPrefix = prefix.padEnd(22, ' ');
+                return `${paddedPrefix}${item.details}`;
+              });
+
               const report = `[EVALUATION] Buy Entrance Checklist for $${selectedGainer.symbol}:
 ----------------------------------------------------------------------
-1. Price Range:       ${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})${!checkPriceRange ? ' [BYPASSED]' : ''}
-2. Daily Gain:        ${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)${!checkDailyGain ? ' [BYPASSED]' : ''}
-3. Relative Vol:      ${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)${!checkRelativeVol ? ' [BYPASSED]' : ''}
-4. Shares Float:      ${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})${!checkSharesFloat ? ' [BYPASSED]' : ''}
-5. Trading Window:    ${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)${!checkTradingWindow ? ' [BYPASSED]' : ''}
-6. News Catalyst:     ${statusChar(passesCatalyst)} (${passesCatalyst ? (checkNewsCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : 'Bypassed') : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})${!checkNewsCatalyst ? ' [BYPASSED]' : ''}
-7. Gemini Sentiment:  ${statusChar(geminiPass)} (${geminiReason})
-8. Bull Flag Pattern: ${statusChar(passesPattern)} (${passesPattern ? (checkBullFlagPattern ? `Detected at Resistance $${patternResult?.resistanceLevel?.toFixed(2)}` : 'Bypassed') : patternReason})${!checkBullFlagPattern ? ' [BYPASSED]' : ''}
-9. Stop Distance:     ${statusChar(passesStop)} (${stopDistStr} | Req: $${minStopDistance.toFixed(2)}-$${maxStopDistance.toFixed(2)})${!checkStopDistance ? ' [BYPASSED]' : ''}
-10. Risk/Reward:      ${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)${!checkRiskReward ? ' [BYPASSED]' : ''}
+${formattedLines.join('\n')}
 ----------------------------------------------------------------------
 Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANCE REQUIREMENTS'}`;
 
