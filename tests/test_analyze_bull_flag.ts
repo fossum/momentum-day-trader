@@ -72,7 +72,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     volume: 2000
   });
 
-  const result = analyzeBullFlag(candles);
+  const result = analyzeBullFlag(candles, undefined, 6.0);
   if (result.detected && result.resistanceLevel === 11.2 && result.pullbackLow === 10.5) {
     console.log("✅ Case 2: Valid Bull Flag detection passed.");
   } else {
@@ -269,6 +269,103 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     console.log("✅ Case 6: Pullback broke below EMA diagnosis passed.");
   } else {
     console.error("❌ Case 6: Pullback broke below EMA diagnosis failed.", result);
+  }
+}
+
+// 7. Test case: Proximity Check Failing
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  }); // resistance: 11.2
+
+  // Pullback: close is 10.6, resistance is 11.2 (diff 5.35%)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.0,
+    high: 11.0,
+    low: 10.7,
+    close: 10.8,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 10.8,
+    high: 10.8,
+    low: 10.5,
+    close: 10.6,
+    volume: 2000
+  });
+
+  // Default maxProximityPercent is 2.0% -> should fail proximity check
+  const result = analyzeBullFlag(candles, undefined, 2.0);
+  if (!result.detected && result.reason?.includes("Proximity check failed")) {
+    console.log("✅ Case 7: Proximity check failing test passed.");
+  } else {
+    console.error("❌ Case 7: Proximity check failing test failed.", result);
+  }
+}
+
+// 8. Test case: Proximity Check Passing (with close price)
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  }); // resistance: 11.2
+
+  // Pullback: close is 10.98 (within 2% of 11.2, close <= open so red/doji)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.0,
+    high: 11.02,
+    low: 10.95,
+    close: 10.98,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 10.98,
+    high: 11.0,
+    low: 10.95,
+    close: 10.98,
+    volume: 2000
+  });
+
+  const result = analyzeBullFlag(candles, undefined, 2.0);
+  if (result.detected && result.resistanceLevel === 11.2) {
+    console.log("✅ Case 8: Proximity check passing test passed.");
+  } else {
+    console.error("❌ Case 8: Proximity check passing test failed.", result);
   }
 }
 

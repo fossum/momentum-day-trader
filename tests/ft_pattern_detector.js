@@ -72,7 +72,7 @@ function getDatePart(dateStr) {
   return dateStr;
 }
 
-function detectBullFlag(candles) {
+function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0) {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
   const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
@@ -120,6 +120,13 @@ function detectBullFlag(candles) {
 
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
+
+        // Proximity Check
+        const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+        const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+        if (pctDiff > (maxProximityPercent / 100)) {
+          continue;
+        }
 
         return {
           detected: true,
@@ -269,7 +276,7 @@ async function runTests() {
       { date: '09:40', open: 5.65, high: 5.68, low: 5.55, close: 5.60, volume: 70000 },
     ];
 
-    const result = detectBullFlag(candles);
+    const result = detectBullFlag(candles, undefined, 5.0);
     assert(result !== null, 'Detects valid bull flag pattern');
     if (result) {
       assert(result.detected === true, 'detected flag is true');
@@ -278,6 +285,10 @@ async function runTests() {
       assert(result.flagpoleCandles.length >= 2, 'Flagpole has 2+ candles');
       assert(result.pullbackCandles.length >= 2, 'Pullback has 2+ candles');
     }
+
+    // Test 4.1: Default proximity check (2.0%) should reject this setup (pullback close 5.60 vs resistance 5.80 is 3.45%)
+    const resultDefault = detectBullFlag(candles);
+    assert(resultDefault === null, 'Rejects bull flag when default 2% proximity check is exceeded');
   }
 
   {

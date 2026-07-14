@@ -45,6 +45,7 @@ export function SettingsModal({
       maxFloatMillions: 20,
       maxStopDistance: 0.20,
       minRewardRiskRatio: 2.0,
+      maxProximityPercent: 2.0,
       simulationSpeed: 6000,
       catalystValidation: 'gemini',
       checkPriceRange: true,
@@ -171,6 +172,19 @@ export function SettingsModal({
                     step="1000"
                     value={preferences.simulationSpeed ?? 6000}
                     onChange={(e) => setPreferences({ ...preferences, simulationSpeed: parseInt(e.target.value) || 6000 })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Proximity (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={preferences.maxProximityPercent ?? 2.0}
+                    onChange={(e) => setPreferences({ ...preferences, maxProximityPercent: parseFloat(e.target.value) || 2.0 })}
                     className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
                   />
                 </div>

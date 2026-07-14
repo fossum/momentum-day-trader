@@ -29,7 +29,11 @@ function getDatePart(dateStr?: string): string {
   return dateStr;
 }
 
-export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
+export function detectBullFlag(
+  candles: Candle[],
+  currentPrice?: number,
+  maxProximityPercent: number = 2.0
+): BullFlagResult | null {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
   const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
@@ -92,6 +96,13 @@ export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
 
+        // Proximity Check
+        const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+        const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+        if (pctDiff > (maxProximityPercent / 100)) {
+          continue;
+        }
+
         return {
           detected: true,
           resistanceLevel,
@@ -111,7 +122,11 @@ export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
  * If detected, returns the pattern setup details.
  * If not detected, evaluates the most recent candidate setups to explain why it failed.
  */
-export function analyzeBullFlag(candles: Candle[]): BullFlagDiagnostic {
+export function analyzeBullFlag(
+  candles: Candle[],
+  currentPrice?: number,
+  maxProximityPercent: number = 2.0
+): BullFlagDiagnostic {
   if (candles.length === 0) return { detected: false, reason: "No candle data" };
   const lastDate = getDatePart(candles[candles.length - 1].date);
   const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
@@ -123,7 +138,7 @@ export function analyzeBullFlag(candles: Candle[]): BullFlagDiagnostic {
   const emaValues = calculate9EMA(candles);
 
   // First, try standard detection
-  const standardResult = detectBullFlag(candles);
+  const standardResult = detectBullFlag(candles, currentPrice, maxProximityPercent);
   if (standardResult) {
     return {
       detected: true,
@@ -190,6 +205,13 @@ export function analyzeBullFlag(candles: Candle[]): BullFlagDiagnostic {
               score += 1;
               if (volRatio >= 0.5) {
                 failureReason = `Pullback average volume is too high (${(volRatio * 100).toFixed(0)}% of flagpole vol, required < 50%)`;
+              } else {
+                const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
+                const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+                const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+                if (pctDiff > (maxProximityPercent / 100)) {
+                  failureReason = `Proximity check failed: price $${priceToCheck.toFixed(2)} is ${(pctDiff * 100).toFixed(2)}% away from resistance $${resistanceLevel.toFixed(2)} (max ${maxProximityPercent.toFixed(1)}%)`;
+                }
               }
             } else {
               failureReason = `Pullback candle low broke below the 9 EMA`;

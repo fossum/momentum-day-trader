@@ -578,7 +578,8 @@ export function ExecutionEngine({
               if (checkBullFlagPattern) {
                 if (Array.isArray(candles) && candles.length >= 4) {
                   const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
-                  patternResult = analyzeBullFlag(sorted);
+                  const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
+                  patternResult = analyzeBullFlag(sorted, liveData.price, maxProximityPercent);
                   passesPattern = patternResult.detected;
                   patternReason = patternResult.reason || "";
                 } else {
@@ -809,9 +810,25 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                   return;
                 }
                 const sorted = [...candles].reverse();
-                patternResult = detectBullFlag(sorted);
+
+                // Fetch current live price to ensure proximity is still valid
+                let livePrice: number | undefined = undefined;
+                try {
+                  const liveRes = await fetch(`/api/stock/${activeTrade.ticker}/live-data`);
+                  if (liveRes.ok) {
+                    const liveData = await liveRes.json();
+                    if (liveData && typeof liveData.price === 'number') {
+                      livePrice = liveData.price;
+                    }
+                  }
+                } catch (e) {
+                  console.warn("Failed to fetch live price in step 2", e);
+                }
+
+                const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
+                patternResult = detectBullFlag(sorted, livePrice, maxProximityPercent);
                 if (!patternResult) {
-                  addLog(`[PATTERN] No bull flag pattern detected for $${activeTrade.ticker}. Skipping.`, 'scan', activeTrade.ticker);
+                  addLog(`[PATTERN] No bull flag pattern detected for $${activeTrade.ticker} (or proximity check failed). Skipping.`, 'scan', activeTrade.ticker);
                   await updateCurrentTrade(null);
                   changeStep(0);
                   return;
