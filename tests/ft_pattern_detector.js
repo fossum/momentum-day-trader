@@ -57,12 +57,32 @@ function calculate9EMA(candles, period = 9) {
   return emaValues;
 }
 
-function detectBullFlag(candles) {
-  if (candles.length < 4) return null;
+function getDatePart(dateStr) {
+  if (!dateStr) return '';
+  if (!dateStr.includes('-') && !dateStr.includes('/')) {
+    // If it doesn't look like a date (e.g., in time-only tests), treat them all as the same date
+    return 'same-date';
+  }
+  if (dateStr.includes(' ')) {
+    return dateStr.split(' ')[0];
+  }
+  if (dateStr.includes('T')) {
+    return dateStr.split('T')[0];
+  }
+  return dateStr;
+}
 
+function detectBullFlag(candles) {
+  if (candles.length === 0) return null;
+  const lastDate = getDatePart(candles[candles.length - 1].date);
+  const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
+  if (filtered.length < 4) return null;
+
+  candles = filtered;
   const emaValues = calculate9EMA(candles);
 
-  for (let pullbackEnd = candles.length - 1; pullbackEnd >= 4; pullbackEnd--) {
+  const maxScanDepth = Math.max(4, candles.length - 10);
+  for (let pullbackEnd = candles.length - 1; pullbackEnd >= maxScanDepth; pullbackEnd--) {
     for (let pullbackLen = 2; pullbackLen <= 4 && pullbackLen <= pullbackEnd; pullbackLen++) {
       const pullbackStart = pullbackEnd - pullbackLen + 1;
       const pullbackCandles = candles.slice(pullbackStart, pullbackEnd + 1);

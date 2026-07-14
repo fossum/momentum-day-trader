@@ -14,14 +14,35 @@ import { calculate9EMA } from './ema';
  * Candles must be in chronological order (oldest first).
  * Analyzes the most recent candles to find the latest pattern.
  */
-export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
-  if (candles.length < 4) return null; // Need at least 2 flagpole + 2 pullback
+function getDatePart(dateStr?: string): string {
+  if (!dateStr) return '';
+  if (!dateStr.includes('-') && !dateStr.includes('/')) {
+    // If it doesn't look like a date (e.g., in time-only tests), treat them all as the same date
+    return 'same-date';
+  }
+  if (dateStr.includes(' ')) {
+    return dateStr.split(' ')[0];
+  }
+  if (dateStr.includes('T')) {
+    return dateStr.split('T')[0];
+  }
+  return dateStr;
+}
 
+export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
+  if (candles.length === 0) return null;
+  const lastDate = getDatePart(candles[candles.length - 1].date);
+  const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
+  if (filtered.length < 4) return null;
+
+  candles = filtered;
   const emaValues = calculate9EMA(candles);
 
   // Scan backwards from the most recent candle to find a pullback
-  // then look for a flagpole before it
-  for (let pullbackEnd = candles.length - 1; pullbackEnd >= 4; pullbackEnd--) {
+  // then look for a flagpole before it. Limit search to the last 10 candles
+  // to ensure the pattern is recent and active.
+  const maxScanDepth = Math.max(4, candles.length - 10);
+  for (let pullbackEnd = candles.length - 1; pullbackEnd >= maxScanDepth; pullbackEnd--) {
     // Try pullback lengths of 2, 3, 4
     for (let pullbackLen = 2; pullbackLen <= 4 && pullbackLen <= pullbackEnd; pullbackLen++) {
       const pullbackStart = pullbackEnd - pullbackLen + 1;
@@ -91,10 +112,14 @@ export function detectBullFlag(candles: Candle[]): BullFlagResult | null {
  * If not detected, evaluates the most recent candidate setups to explain why it failed.
  */
 export function analyzeBullFlag(candles: Candle[]): BullFlagDiagnostic {
-  if (candles.length < 4) {
-    return { detected: false, reason: `Insufficient candle data (${candles.length} candles, minimum 4 required)` };
+  if (candles.length === 0) return { detected: false, reason: "No candle data" };
+  const lastDate = getDatePart(candles[candles.length - 1].date);
+  const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
+  if (filtered.length < 4) {
+    return { detected: false, reason: `Insufficient candle data for today (${filtered.length} candles, minimum 4 required)` };
   }
 
+  candles = filtered;
   const emaValues = calculate9EMA(candles);
 
   // First, try standard detection
