@@ -35,7 +35,7 @@ Specifically, the rules allow authenticated users to read and write to the globa
 ```javascript
 match /newsSentiment/{newsId} {
   allow read: if request.auth != null;
-  allow create, update: if request.auth != null
+  allow create: if request.auth != null
     && newsId is string && newsId.size() <= 128 && newsId.matches('^[a-zA-Z0-9_\\-]+$')
     && request.resource.data.ticker is string
     && request.resource.data.headline is string

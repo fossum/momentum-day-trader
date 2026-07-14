@@ -91,7 +91,7 @@ service cloud.firestore {
 
     match /newsSentiment/{newsId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn()
+      allow create: if isSignedIn()
         && isValidId(newsId)
         && incoming().ticker is string
         && incoming().headline is string
