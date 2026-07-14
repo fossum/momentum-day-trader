@@ -6,9 +6,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Disable TLS verification for IBKR Client Portal Gateway self-signed certs
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 // Helper to calculate EMA from a chronological list of candles
 function computeLocalEma(candles: any[], period: number = 9): number[] {
   if (candles.length < period) {
@@ -61,13 +58,13 @@ async function startServer() {
       const response = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`);
       if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
       const data = await response.json();
-      
+
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
         ...item,
         changesPercentage: item.changesPercentage !== undefined ? item.changesPercentage : item.changePercentage
       }));
-      
+
       res.json(mappedData);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -78,7 +75,7 @@ async function startServer() {
     try {
       const ticker = req.params.ticker.toUpperCase();
       const key = getFmpKey();
-      
+
       const brokerage = req.headers["x-brokerage"];
       const ibkrUrl = req.headers["x-ibkr-url"];
       const robinhoodToken = req.headers["x-robinhood-token"];
@@ -167,7 +164,7 @@ async function startServer() {
       // Fetch FMP news and quote as fallback / supplemental data
       let quote: any = null;
       let newsData: any[] = [];
-      
+
       try {
         const quoteRes = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`);
         if (quoteRes.ok) {
@@ -224,7 +221,7 @@ async function startServer() {
               if (!t.transactionDate || !t.transactionType) return false;
               const isPurchase = t.transactionType.toUpperCase().includes("PURCHASE") || t.acquisitionOrDisposition === "A";
               if (!isPurchase) return false;
-              
+
               const txDate = new Date(t.transactionDate);
               const now = new Date();
               const diffTime = Math.abs(now.getTime() - txDate.getTime());
@@ -302,7 +299,7 @@ async function startServer() {
         if (Array.isArray(data) && data.length > 0) {
           const chronological = [...data].reverse();
           const localEmaValues = computeLocalEma(chronological, 9);
-          
+
           const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
           const emaApiRes = await fetch(emaApiUrl);
           if (emaApiRes.ok) {
@@ -368,7 +365,7 @@ async function startServer() {
       const response = await fetch(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`);
       if (!response.ok) throw new Error(`FMP API error: status ${response.status}`);
       const data = await response.json();
-      
+
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
         ...item,
@@ -384,7 +381,7 @@ async function startServer() {
   app.get("/api/market/status", async (req, res) => {
     try {
       const key = getFmpKey();
-      
+
       // Get today's date in New York timezone (YYYY-MM-DD)
       const etString = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
       const etDate = new Date(etString);

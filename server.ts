@@ -8,9 +8,6 @@ import { analyzeNewsSentiment } from "./src/lib/gemini";
 
 dotenv.config();
 
-// Disable TLS verification for IBKR Client Portal Gateway self-signed certs
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 // Helper to get Eastern ISO string format
 function getEasternISOString(date: Date = new Date()): string {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -23,14 +20,14 @@ function getEasternISOString(date: Date = new Date()): string {
     second: '2-digit',
     hour12: false
   });
-  
+
   const parts = formatter.formatToParts(date);
   const partMap = Object.fromEntries(parts.map(p => [p.type, p.value]));
   let hour = partMap.hour;
   if (hour === '24') hour = '00';
-  
+
   const ms = String(date.getMilliseconds()).padStart(3, '0');
-  
+
   const tzFormatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     timeZoneName: 'longOffset'
@@ -38,7 +35,7 @@ function getEasternISOString(date: Date = new Date()): string {
   const tzParts = tzFormatter.formatToParts(date);
   const tzName = tzParts.find(p => p.type === 'timeZoneName')?.value || 'GMT-04:00';
   const offset = tzName.replace('GMT', '');
-  
+
   return `${partMap.year}-${partMap.month}-${partMap.day}T${hour}:${partMap.minute}:${partMap.second}.${ms}${offset}`;
 }
 
@@ -126,7 +123,7 @@ async function startServer() {
         throw new Error(`FMP quote fetch failed with status ${quoteRes.status === 'fulfilled' ? quoteRes.value.status : 'rejected'}`);
       }
       const data = await quoteRes.value.json();
-      
+
       let floatShares = 0;
       let outstandingShares = 0;
       if (floatRes.status === 'fulfilled' && floatRes.value.ok) {
@@ -163,7 +160,7 @@ async function startServer() {
           avgVolume: avgVolume || item.avgVolume || 0
         };
       });
-      
+
       res.json(mappedData);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -266,7 +263,7 @@ async function startServer() {
       let floatShares = 0;
       let outstandingShares = 0;
       let profileAvgVolume = 0;
-      
+
       try {
         const [quoteRes, floatRes, profileRes, newsRes] = await Promise.allSettled([
           fetch(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`),
@@ -339,7 +336,7 @@ async function startServer() {
               if (!t.transactionDate || !t.transactionType) return false;
               const isPurchase = t.transactionType.toUpperCase().includes("PURCHASE") || t.acquisitionOrDisposition === "A";
               if (!isPurchase) return false;
-              
+
               const txDate = new Date(t.transactionDate);
               const now = new Date();
               const diffTime = Math.abs(now.getTime() - txDate.getTime());
@@ -420,7 +417,7 @@ async function startServer() {
         if (Array.isArray(data) && data.length > 0) {
           const chronological = [...data].reverse();
           const localEmaValues = computeLocalEma(chronological, 9);
-          
+
           const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
           const emaApiRes = await fetch(emaApiUrl);
           if (emaApiRes.ok) {
@@ -522,7 +519,7 @@ async function startServer() {
   app.get("/api/market/status", async (req, res) => {
     try {
       const key = getFmpKey();
-      
+
       // Get today's date in New York timezone (YYYY-MM-DD)
       const etString = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
       const etDate = new Date(etString);
