@@ -5,11 +5,12 @@ import { calculate9EMA } from './ema';
  * Detect a Ross Cameron-style Bull Flag pattern from 1-minute candles.
  *
  * Phase A (Flagpole): 2–3 consecutive green candles making new highs
- * with aggressive volume acceleration.
+ * with aggressive volume acceleration. Allows up to maxFlagpoleRedCandles micro-red candles.
  *
  * Phase B (Pullback): 2–4 subsequent red/doji candles where:
  *   - Average pullback volume < 50% of average flagpole volume
  *   - Price holds above the 9 EMA
+ *   - Allows up to maxPullbackGreenCandles micro-green candles.
  *
  * Candles must be in chronological order (oldest first).
  * Analyzes the most recent candles to find the latest pattern.
@@ -29,10 +30,28 @@ function getDatePart(dateStr?: string): string {
   return dateStr;
 }
 
+function isMicroRedOrDoji(c: Candle): boolean {
+  if (c.close > c.open) return false;
+  const body = c.open - c.close;
+  const relativeBody = body / c.open;
+  // Body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
+function isMicroGreenOrDoji(c: Candle): boolean {
+  if (c.close <= c.open + 0.005) return true; // Standard red/doji is already conforming
+  const body = c.close - c.open;
+  const relativeBody = body / c.open;
+  // Green body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
 export function detectBullFlag(
   candles: Candle[],
   currentPrice?: number,
-  maxProximityPercent: number = 2.0
+  maxProximityPercent: number = 2.0,
+  maxFlagpoleRedCandles: number = 1,
+  maxPullbackGreenCandles: number = 1
 ): BullFlagResult | null {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -54,9 +73,13 @@ export function detectBullFlag(
       // Extract pullback candles
       const pullbackCandles = candles.slice(pullbackStart, pullbackEnd + 1);
 
-      // Check pullback candles are red or doji (close <= open + 0.005)
-      const allRedOrDoji = pullbackCandles.every(c => c.close <= c.open + 0.005);
-      if (!allRedOrDoji) continue;
+      // Check pullback candles color validation
+      let pullbackColorPass = false;
+      const greenCandles = pullbackCandles.filter(c => c.close > c.open + 0.005);
+      if (greenCandles.length <= maxPullbackGreenCandles) {
+        pullbackColorPass = greenCandles.every(isMicroGreenOrDoji);
+      }
+      if (!pullbackColorPass) continue;
 
       // Check pullback holds above 9 EMA
       const pullbackHoldsEma = pullbackCandles.every((c, i) => {
@@ -71,9 +94,19 @@ export function detectBullFlag(
         const flagpoleStart = pullbackStart - flagpoleLen;
         const flagpoleCandles = candles.slice(flagpoleStart, pullbackStart);
 
-        // Check flagpole candles are green (close > open)
-        const allGreen = flagpoleCandles.every(c => c.close > c.open);
-        if (!allGreen) continue;
+        // Check flagpole candles color validation
+        let flagpoleColorPass = false;
+        const nonGreenCandles = flagpoleCandles.filter(c => c.close <= c.open);
+        if (nonGreenCandles.length <= maxFlagpoleRedCandles) {
+          flagpoleColorPass = nonGreenCandles.every(isMicroRedOrDoji);
+        }
+        // Ensure overall flagpole is net green (last close > first open)
+        if (flagpoleColorPass && flagpoleCandles.length > 1) {
+          if (flagpoleCandles[flagpoleCandles.length - 1].close <= flagpoleCandles[0].open) {
+            flagpoleColorPass = false;
+          }
+        }
+        if (!flagpoleColorPass) continue;
 
         // Check flagpole candles are making new highs
         let makingNewHighs = true;
@@ -125,7 +158,9 @@ export function detectBullFlag(
 export function analyzeBullFlag(
   candles: Candle[],
   currentPrice?: number,
-  maxProximityPercent: number = 2.0
+  maxProximityPercent: number = 2.0,
+  maxFlagpoleRedCandles: number = 1,
+  maxPullbackGreenCandles: number = 1
 ): BullFlagDiagnostic {
   if (candles.length === 0) return { detected: false, reason: "No candle data" };
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -138,7 +173,7 @@ export function analyzeBullFlag(
   const emaValues = calculate9EMA(candles);
 
   // First, try standard detection
-  const standardResult = detectBullFlag(candles, currentPrice, maxProximityPercent);
+  const standardResult = detectBullFlag(candles, currentPrice, maxProximityPercent, maxFlagpoleRedCandles, maxPullbackGreenCandles);
   if (standardResult) {
     return {
       detected: true,
@@ -168,8 +203,12 @@ export function analyzeBullFlag(
       return emaIdx < emaValues.length && c.low >= emaValues[emaIdx] * 0.998;
     });
 
-    // Check if pullback candles are red/doji
-    const allRedOrDoji = pullbackCandles.every(c => c.close <= c.open + 0.005);
+    // Check pullback candles color validation
+    let pullbackColorPass = false;
+    const greenCandles = pullbackCandles.filter(c => c.close > c.open + 0.005);
+    if (greenCandles.length <= maxPullbackGreenCandles) {
+      pullbackColorPass = greenCandles.every(isMicroGreenOrDoji);
+    }
 
     for (let flagpoleLen = 2; flagpoleLen <= 3; flagpoleLen++) {
       const flagpoleStart = pullbackStart - flagpoleLen;
@@ -177,7 +216,18 @@ export function analyzeBullFlag(
 
       const flagpoleCandles = candles.slice(flagpoleStart, pullbackStart);
 
-      const allGreen = flagpoleCandles.every(c => c.close > c.open);
+      // Check flagpole candles color validation
+      let flagpoleColorPass = false;
+      const nonGreenCandles = flagpoleCandles.filter(c => c.close <= c.open);
+      if (nonGreenCandles.length <= maxFlagpoleRedCandles) {
+        flagpoleColorPass = nonGreenCandles.every(isMicroRedOrDoji);
+      }
+      // Ensure overall flagpole is net green (last close > first open)
+      if (flagpoleColorPass && flagpoleCandles.length > 1) {
+        if (flagpoleCandles[flagpoleCandles.length - 1].close <= flagpoleCandles[0].open) {
+          flagpoleColorPass = false;
+        }
+      }
 
       let makingNewHighs = true;
       for (let i = 1; i < flagpoleCandles.length; i++) {
@@ -195,11 +245,11 @@ export function analyzeBullFlag(
       let score = 0;
       let failureReason = "";
 
-      if (allGreen) {
+      if (flagpoleColorPass) {
         score += 1;
         if (makingNewHighs) {
           score += 1;
-          if (allRedOrDoji) {
+          if (pullbackColorPass) {
             score += 1;
             if (pullbackHoldsEma) {
               score += 1;

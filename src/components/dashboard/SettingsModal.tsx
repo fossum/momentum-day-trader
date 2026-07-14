@@ -55,7 +55,9 @@ export function SettingsModal({
       checkTradingWindow: true,
       checkBullFlagPattern: true,
       checkStopDistance: true,
-      checkRiskReward: true
+      checkRiskReward: true,
+      maxFlagpoleRedCandles: 1,
+      maxPullbackGreenCandles: 1
     });
   };
 
@@ -185,6 +187,37 @@ export function SettingsModal({
                     step="0.1"
                     value={preferences.maxProximityPercent ?? 2.0}
                     onChange={(e) => setPreferences({ ...preferences, maxProximityPercent: parseFloat(e.target.value) || 2.0 })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Flagpole Red Candles</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="3"
+                    value={preferences.maxFlagpoleRedCandles ?? 1}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setPreferences({ ...preferences, maxFlagpoleRedCandles: isNaN(val) ? 0 : val });
+                    }}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Pullback Green Candles</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="4"
+                    value={preferences.maxPullbackGreenCandles ?? 1}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setPreferences({ ...preferences, maxPullbackGreenCandles: isNaN(val) ? 0 : val });
+                    }}
                     className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
                   />
                 </div>

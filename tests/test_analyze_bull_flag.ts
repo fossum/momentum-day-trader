@@ -120,7 +120,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     volume: 2000
   });
 
-  const result = analyzeBullFlag(candles);
+  const result = analyzeBullFlag(candles, undefined, 2.0, 0, 0);
   if (!result.detected && result.reason?.includes("Flagpole candles are not all green")) {
     console.log("✅ Case 3: Flagpole not all green diagnosis passed.");
   } else {
@@ -168,7 +168,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     volume: 2000
   });
 
-  const result = analyzeBullFlag(candles);
+  const result = analyzeBullFlag(candles, undefined, 2.0, 0, 0);
   if (!result.detected && result.reason?.includes("making higher highs")) {
     console.log("✅ Case 4: Flagpole not making higher highs diagnosis passed.");
   } else {
@@ -216,7 +216,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     volume: 7000
   });
 
-  const result = analyzeBullFlag(candles);
+  const result = analyzeBullFlag(candles, undefined, 2.0, 0, 0);
   if (!result.detected && result.reason?.includes("volume is too high")) {
     console.log("✅ Case 5: Pullback volume too high diagnosis passed.");
   } else {
@@ -264,7 +264,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     volume: 2000
   });
 
-  const result = analyzeBullFlag(candles);
+  const result = analyzeBullFlag(candles, undefined, 2.0, 0, 0);
   if (!result.detected && result.reason?.includes("broke below the 9 EMA")) {
     console.log("✅ Case 6: Pullback broke below EMA diagnosis passed.");
   } else {
@@ -313,7 +313,7 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
   });
 
   // Default maxProximityPercent is 2.0% -> should fail proximity check
-  const result = analyzeBullFlag(candles, undefined, 2.0);
+  const result = analyzeBullFlag(candles, undefined, 2.0, 0, 0);
   if (!result.detected && result.reason?.includes("Proximity check failed")) {
     console.log("✅ Case 7: Proximity check failing test passed.");
   } else {
@@ -366,6 +366,110 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
     console.log("✅ Case 8: Proximity check passing test passed.");
   } else {
     console.error("❌ Case 8: Proximity check passing test failed.", result);
+  }
+}
+
+// 9. Test case: Flagpole with 1 micro-red candle
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole with a micro-red candle (body 0.01)
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4, // Green
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.5,
+    high: 11.2,
+    low: 10.4,
+    close: 10.49, // Micro-red body = 0.01 (1 cent)
+    volume: 15000
+  });
+
+  // Pullback
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 10.49,
+    high: 10.50,
+    low: 10.35, // Raised from 10.20 to hold above EMA
+    close: 10.40, // Red
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 10.40,
+    high: 10.40,
+    low: 10.25, // Raised from 10.10 to hold above EMA
+    close: 10.30, // Red
+    volume: 2000
+  });
+
+  // Default relaxed mode (maxFlagpoleRedCandles = 1) -> should detect
+  const resultRelaxed = analyzeBullFlag(candles, undefined, 10.0, 1, 1);
+  // Strict mode (maxFlagpoleRedCandles = 0) -> should fail
+  const resultStrict = analyzeBullFlag(candles, undefined, 10.0, 0, 1);
+
+  if (resultRelaxed.detected && !resultStrict.detected && resultStrict.reason?.includes("Flagpole candles are not all green")) {
+    console.log("✅ Case 9: Flagpole micro-red tolerance test passed.");
+  } else {
+    console.error("❌ Case 9: Flagpole micro-red tolerance test failed.", { resultRelaxed, resultStrict });
+  }
+}
+
+// 10. Test case: Pullback with 1 micro-green candle
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  });
+
+  // Pullback: with 1 micro-green candle (body 0.01)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.0,
+    high: 11.0,
+    low: 10.7,
+    close: 10.8, // Red
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 10.8,
+    high: 10.82,
+    low: 10.78,
+    close: 10.81, // Micro-green body = 0.01 (1 cent)
+    volume: 2000
+  });
+
+  // Default relaxed mode (maxPullbackGreenCandles = 1) -> should detect
+  const resultRelaxed = analyzeBullFlag(candles, undefined, 6.0, 1, 1);
+  // Strict mode (maxPullbackGreenCandles = 0) -> should fail
+  const resultStrict = analyzeBullFlag(candles, undefined, 6.0, 1, 0);
+
+  if (resultRelaxed.detected && !resultStrict.detected && resultStrict.reason?.includes("Pullback candles are not all red/doji")) {
+    console.log("✅ Case 10: Pullback micro-green tolerance test passed.");
+  } else {
+    console.error("❌ Case 10: Pullback micro-green tolerance test failed.", { resultRelaxed, resultStrict });
   }
 }
 

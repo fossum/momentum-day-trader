@@ -84,6 +84,8 @@ export interface UserPreferences {
   minRewardRiskRatio?: number;
   maxProximityPercent?: number;
   simulationSpeed?: number;
+  maxFlagpoleRedCandles?: number;
+  maxPullbackGreenCandles?: number;
 }
 
 export interface LowFloatTicker {

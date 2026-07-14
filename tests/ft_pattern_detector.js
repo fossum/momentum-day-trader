@@ -72,7 +72,23 @@ function getDatePart(dateStr) {
   return dateStr;
 }
 
-function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0) {
+function isMicroRedOrDoji(c) {
+  if (c.close > c.open) return false;
+  const body = c.open - c.close;
+  const relativeBody = body / c.open;
+  // Body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
+function isMicroGreenOrDoji(c) {
+  if (c.close <= c.open + 0.005) return true; // Standard red/doji is already conforming
+  const body = c.close - c.open;
+  const relativeBody = body / c.open;
+  // Green body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
+function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFlagpoleRedCandles = 1, maxPullbackGreenCandles = 1) {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
   const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
@@ -87,8 +103,12 @@ function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0) {
       const pullbackStart = pullbackEnd - pullbackLen + 1;
       const pullbackCandles = candles.slice(pullbackStart, pullbackEnd + 1);
 
-      const allRedOrDoji = pullbackCandles.every(c => c.close <= c.open + 0.005);
-      if (!allRedOrDoji) continue;
+      let pullbackColorPass = false;
+      const greenCandles = pullbackCandles.filter(c => c.close > c.open + 0.005);
+      if (greenCandles.length <= maxPullbackGreenCandles) {
+        pullbackColorPass = greenCandles.every(isMicroGreenOrDoji);
+      }
+      if (!pullbackColorPass) continue;
 
       const pullbackHoldsEma = pullbackCandles.every((c, i) => {
         const emaIdx = pullbackStart + i;
@@ -100,8 +120,17 @@ function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0) {
         const flagpoleStart = pullbackStart - flagpoleLen;
         const flagpoleCandles = candles.slice(flagpoleStart, pullbackStart);
 
-        const allGreen = flagpoleCandles.every(c => c.close > c.open);
-        if (!allGreen) continue;
+        let flagpoleColorPass = false;
+        const nonGreenCandles = flagpoleCandles.filter(c => c.close <= c.open);
+        if (nonGreenCandles.length <= maxFlagpoleRedCandles) {
+          flagpoleColorPass = nonGreenCandles.every(isMicroRedOrDoji);
+        }
+        if (flagpoleColorPass && flagpoleCandles.length > 1) {
+          if (flagpoleCandles[flagpoleCandles.length - 1].close <= flagpoleCandles[0].open) {
+            flagpoleColorPass = false;
+          }
+        }
+        if (!flagpoleColorPass) continue;
 
         let makingNewHighs = true;
         for (let i = 1; i < flagpoleCandles.length; i++) {
@@ -321,6 +350,56 @@ async function runTests() {
     ];
     const result = detectBullFlag(candles);
     assert(result === null, 'Returns null with insufficient candles');
+  }
+
+  {
+    // Test 6.1: Valid pattern with 1 micro-red candle in flagpole (when maxFlagpoleRedCandles is 1)
+    const candles = [
+      { date: '09:30', open: 5.0, high: 5.1, low: 4.9, close: 5.05, volume: 50000 },
+      { date: '09:31', open: 5.05, high: 5.15, low: 5.0, close: 5.10, volume: 55000 },
+      { date: '09:32', open: 5.10, high: 5.20, low: 5.05, close: 5.15, volume: 50000 },
+      { date: '09:33', open: 5.15, high: 5.25, low: 5.10, close: 5.20, volume: 50000 },
+      { date: '09:34', open: 5.20, high: 5.30, low: 5.15, close: 5.25, volume: 50000 },
+      { date: '09:35', open: 5.25, high: 5.35, low: 5.20, close: 5.30, volume: 50000 },
+      { date: '09:36', open: 5.30, high: 5.40, low: 5.25, close: 5.35, volume: 50000 },
+      // Flagpole: 1 green candle, 1 micro-red candle, making new high
+      { date: '09:37', open: 5.35, high: 5.60, low: 5.30, close: 5.55, volume: 500000 },
+      { date: '09:38', open: 5.55, high: 5.80, low: 5.50, close: 5.54, volume: 600000 }, // micro-red body 0.01 (1 cent)
+      // Pullback: 2 red candles
+      { date: '09:39', open: 5.54, high: 5.55, low: 5.45, close: 5.46, volume: 80000 },
+      { date: '09:40', open: 5.46, high: 5.48, low: 5.40, close: 5.42, volume: 70000 },
+    ];
+
+    const resultRelaxed = detectBullFlag(candles, undefined, 7.0, 1, 1);
+    assert(resultRelaxed !== null, 'Accepts flagpole with 1 micro-red candle under relaxed mode');
+
+    const resultStrict = detectBullFlag(candles, undefined, 7.0, 0, 1);
+    assert(resultStrict === null, 'Rejects flagpole with 1 micro-red candle under strict mode');
+  }
+
+  {
+    // Test 6.2: Valid pattern with 1 micro-green candle in pullback (when maxPullbackGreenCandles is 1)
+    const candles = [
+      { date: '09:30', open: 5.0, high: 5.1, low: 4.9, close: 5.05, volume: 50000 },
+      { date: '09:31', open: 5.05, high: 5.15, low: 5.0, close: 5.10, volume: 55000 },
+      { date: '09:32', open: 5.10, open: 5.10, high: 5.20, low: 5.05, close: 5.15, volume: 50000 },
+      { date: '09:33', open: 5.15, high: 5.25, low: 5.10, close: 5.20, volume: 50000 },
+      { date: '09:34', open: 5.20, high: 5.30, low: 5.15, close: 5.25, volume: 50000 },
+      { date: '09:35', open: 5.25, high: 5.35, low: 5.20, close: 5.30, volume: 50000 },
+      { date: '09:36', open: 5.30, high: 5.40, low: 5.25, close: 5.35, volume: 50000 },
+      // Flagpole: 2 green candles
+      { date: '09:37', open: 5.35, high: 5.60, low: 5.30, close: 5.55, volume: 500000 },
+      { date: '09:38', open: 5.55, high: 5.80, low: 5.50, close: 5.75, volume: 600000 },
+      // Pullback: 1 red candle, 1 micro-green candle
+      { date: '09:39', open: 5.75, high: 5.76, low: 5.60, close: 5.65, volume: 80000 },
+      { date: '09:40', open: 5.65, high: 5.67, low: 5.60, close: 5.66, volume: 70000 }, // micro-green body 0.01 (1 cent)
+    ];
+
+    const resultRelaxed = detectBullFlag(candles, undefined, 5.0, 1, 1);
+    assert(resultRelaxed !== null, 'Accepts pullback with 1 micro-green candle under relaxed mode');
+
+    const resultStrict = detectBullFlag(candles, undefined, 5.0, 1, 0);
+    assert(resultStrict === null, 'Rejects pullback with 1 micro-green candle under strict mode');
   }
 
   // ----- Catalyst Validation Tests -----

@@ -579,7 +579,15 @@ export function ExecutionEngine({
                 if (Array.isArray(candles) && candles.length >= 4) {
                   const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
                   const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
-                  patternResult = analyzeBullFlag(sorted, liveData.price, maxProximityPercent);
+                  const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
+                  const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
+                  patternResult = analyzeBullFlag(
+                    sorted,
+                    liveData.price,
+                    maxProximityPercent,
+                    maxFlagpoleRedCandles,
+                    maxPullbackGreenCandles
+                  );
                   passesPattern = patternResult.detected;
                   patternReason = patternResult.reason || "";
                 } else {
@@ -826,7 +834,15 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 }
 
                 const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
-                patternResult = detectBullFlag(sorted, livePrice, maxProximityPercent);
+                const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
+                const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
+                patternResult = detectBullFlag(
+                  sorted,
+                  livePrice,
+                  maxProximityPercent,
+                  maxFlagpoleRedCandles,
+                  maxPullbackGreenCandles
+                );
                 if (!patternResult) {
                   addLog(`[PATTERN] No bull flag pattern detected for $${activeTrade.ticker} (or proximity check failed). Skipping.`, 'scan', activeTrade.ticker);
                   await updateCurrentTrade(null);
