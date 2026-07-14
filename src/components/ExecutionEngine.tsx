@@ -79,6 +79,7 @@ export function ExecutionEngine({
   const checkedSymbolsRef = useRef<Set<string>>(new Set());
   // Track the breakout entry price for bailout logic (separate from limit entry)
   const entryLivePriceRef = useRef<number>(0);
+  const lastLoggedMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
     stepRef.current = step;
@@ -114,6 +115,18 @@ export function ExecutionEngine({
 
   // Add terminal log helper
   const addLog = useCallback((text: string, type: LogMessage['type'] = 'info', ticker?: string) => {
+    // Only log repeating window/holiday/status messages if it wasn't the last message logged
+    const isSpammyMessage =
+      text.includes("Outside Ross Cameron trading window") ||
+      text.includes("Today is a market holiday") ||
+      text.includes("FMP reports market is closed");
+
+    if (isSpammyMessage && lastLoggedMessageRef.current === text) {
+      return;
+    }
+
+    lastLoggedMessageRef.current = text;
+
     const newLog: LogMessage = {
       id: Math.random().toString(36).substring(2, 9),
       text,
