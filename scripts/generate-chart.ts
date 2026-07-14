@@ -1,8 +1,39 @@
+/**
+ * @file generate-chart.ts
+ * @description Batch decision chart overlay script. Scans momentum trading bot log files for Buy Entrance Checklist
+ * occurrences, fetches historical 1-minute intraday candles from Financial Modeling Prep (FMP) API,
+ * overlays technical analysis markers (EMA-9, Resistance levels, Stop Losses, Trade Entry/Abort decision markers),
+ * and generates interactive HTML chart files in the `public/` directory.
+ * 
+ * @usage
+ * npx tsx scripts/generate-chart.ts [ticker] [filterDate] [options]
+ * 
+ * @arguments
+ *   ticker       (Optional) The stock ticker symbol to look up in the logs (default: JZXN).
+ *   filterDate   (Optional) Filter evaluations to a specific date in YYYY-MM-DD format.
+ * 
+ * @options
+ *   --log <path>       Specify the path to the log file.
+ *   --user <userId>    Specify a user ID to read logs from `logs/<userId>.log`.
+ * 
+ * @environment-variables
+ *   FMP_API_KEY        (Required) Your Financial Modeling Prep API Key.
+ *   LOG_FILE_PATH      (Optional) Path to log file.
+ *   USER_ID            (Optional) Firebase user ID.
+ * 
+ * @behavior
+ * If neither command-line options nor environment variables are supplied to specify a log file,
+ * the script dynamically scans the `logs/` directory. It looks for files named with a 28-character
+ * Firebase UID pattern, picking the most recently modified one. If no such file matches, it falls back
+ * to the most recently modified `.log` file in the directory.
+ */
+
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import { calculate9EMA } from '../src/lib/momentum/ema';
 import { detectBullFlag } from '../src/lib/momentum/bullFlag';
+
 
 // Load environment variables
 dotenv.config();
@@ -14,8 +45,39 @@ if (!FMP_API_KEY) {
 }
 
 // Parse arguments
-const ticker = (process.argv[2] || 'JZXN').toUpperCase();
-const filterDate = process.argv[3] || ''; // YYYY-MM-DD (optional filter)
+let ticker = '';
+let filterDate = '';
+let logPathInput = '';
+let userIdInput = '';
+
+const args = process.argv.slice(2);
+let positionalCount = 0;
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg.startsWith('--log=')) {
+    logPathInput = arg.split('=')[1];
+  } else if (arg === '--log') {
+    logPathInput = args[++i];
+  } else if (arg.startsWith('--user=')) {
+    userIdInput = arg.split('=')[1];
+  } else if (arg === '--user') {
+    userIdInput = args[++i];
+  } else if (arg.startsWith('-')) {
+    // ignore unknown flags
+  } else {
+    if (positionalCount === 0) {
+      ticker = arg.toUpperCase();
+      positionalCount++;
+    } else if (positionalCount === 1) {
+      filterDate = arg;
+      positionalCount++;
+    }
+  }
+}
+
+if (!ticker) {
+  ticker = 'JZXN';
+}
 
 console.log(`Running batch decision chart overlay script for $${ticker}...`);
 
@@ -56,7 +118,67 @@ function fmpDateToUnix(fmpDate: string): number {
 }
 
 // Load and parse log file
-const logPath = path.join(process.cwd(), 'logs/H5hyoiz4kIdrWkUeDFZV7mcCg802.log');
+const envLogPath = process.env.LOG_FILE_PATH;
+const envUserId = process.env.USER_ID;
+
+let logPath = '';
+
+if (logPathInput) {
+  logPath = path.isAbsolute(logPathInput) ? logPathInput : path.join(process.cwd(), logPathInput);
+} else if (userIdInput) {
+  logPath = path.join(process.cwd(), 'logs', `${userIdInput}.log`);
+} else if (envLogPath) {
+  logPath = path.isAbsolute(envLogPath) ? envLogPath : path.join(process.cwd(), envLogPath);
+} else if (envUserId) {
+  logPath = path.join(process.cwd(), 'logs', `${envUserId}.log`);
+} else {
+  // Dynamically scan logs directory
+  const logsDir = path.join(process.cwd(), 'logs');
+  if (fs.existsSync(logsDir)) {
+    const files = fs.readdirSync(logsDir);
+    const logFiles = files.filter(f => f.endsWith('.log'));
+
+    if (logFiles.length > 0) {
+      // Find the best log file
+      // Prefer ones that match a standard 28-character Firebase UID (like abc123xyz456mock789user00000.log)
+      const firebaseUidPattern = /^[a-zA-Z0-9]{28}\.log$/;
+      const matchingFiles = logFiles.filter(f => firebaseUidPattern.test(f));
+
+      let selectedFile = '';
+      if (matchingFiles.length > 0) {
+        // If there are multiple, get the most recently modified one
+        const sorted = matchingFiles.map(f => {
+          const filePath = path.join(logsDir, f);
+          const stat = fs.statSync(filePath);
+          return { name: f, mtime: stat.mtimeMs };
+        }).sort((a, b) => b.mtime - a.mtime);
+        selectedFile = sorted[0].name;
+      } else {
+        // Exclude files containing 'copy' or 'backup' if possible, otherwise take the first
+        const nonCopyFiles = logFiles.filter(f => !f.toLowerCase().includes('copy') && !f.toLowerCase().includes('backup'));
+        const filesToChooseFrom = nonCopyFiles.length > 0 ? nonCopyFiles : logFiles;
+
+        const sorted = filesToChooseFrom.map(f => {
+          const filePath = path.join(logsDir, f);
+          const stat = fs.statSync(filePath);
+          return { name: f, mtime: stat.mtimeMs };
+        }).sort((a, b) => b.mtime - a.mtime);
+        selectedFile = sorted[0].name;
+      }
+
+      if (selectedFile) {
+        logPath = path.join(logsDir, selectedFile);
+        console.log(`Auto-detected log file: ${selectedFile}`);
+      }
+    }
+  }
+}
+
+if (!logPath) {
+  console.error("Error: No log file specified or auto-detected. Provide one via --log <path>, --user <id>, or the LOG_FILE_PATH / USER_ID environment variables.");
+  process.exit(1);
+}
+
 if (!fs.existsSync(logPath)) {
   console.error(`Error: Log file not found at ${logPath}`);
   process.exit(1);
@@ -110,7 +232,7 @@ for (let i = 0; i < lines.length; i++) {
 console.log(`Found ${occurrences.length} evaluation checklist occurrences for $${ticker} in log.`);
 
 // Filter occurrences if filterDate is provided
-const filteredOccurrences = filterDate 
+const filteredOccurrences = filterDate
   ? occurrences.filter(occ => occ.timestamp.startsWith(filterDate))
   : occurrences;
 
@@ -220,7 +342,7 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
   const checklistUnix = Math.floor(new Date(timestamp).getTime() / 1000);
   const candlesUpToDecision = chronologicalCandles.filter(c => fmpDateToUnix(c.date) <= checklistUnix);
   const patternResult = detectBullFlag(candlesUpToDecision.length > 0 ? candlesUpToDecision : chronologicalCandles);
-  
+
   let resistanceLevel = patternResult?.resistanceLevel || 0;
   let pullbackLow = patternResult?.pullbackLow || 0;
 
@@ -242,7 +364,7 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
   let markerTime = 0;
   let closestDiff = Infinity;
   const finalDecisionUnix = Math.floor(new Date(finalDecisionTime).getTime() / 1000);
-  
+
   chartCandleData.forEach(c => {
     const candleMin = Math.floor(c.time / 60);
     const decisionMin = Math.floor(finalDecisionUnix / 60);
