@@ -32,6 +32,17 @@ export function passesFloatFilter(
   return sharesOutstanding >= 1000 && sharesOutstanding <= (maxFloatMillions * 1000000);
 }
 
+/**
+ * Exclude tickers containing "ETF", "Leverage", or "Target" (case-insensitive) in their symbol or name.
+ */
+export function passesTickerFilter(symbol: string, name?: string): boolean {
+  const sym = symbol.toUpperCase();
+  const n = (name || '').toUpperCase();
+  const excludedKeywords = ['ETF', 'LEVERAGE', 'TARGET'];
+  
+  return !excludedKeywords.some(keyword => sym.includes(keyword) || n.includes(keyword));
+}
+
 export const formatCompact = (num: number, locale = 'en-US'): string => {
   return new Intl.NumberFormat(locale, {
     notation: 'compact',

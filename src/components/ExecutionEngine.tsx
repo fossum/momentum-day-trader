@@ -13,6 +13,7 @@ import {
   passesBaselineFilter,
   passesRvolFilter,
   passesFloatFilter,
+  passesTickerFilter,
   isWithinTradingWindow,
   formatCompact,
   analyzeBullFlag
@@ -411,6 +412,14 @@ export function ExecutionEngine({
                   continue;
                 }
 
+                if (!passesTickerFilter(g.symbol, g.name)) {
+                  if (!checkedSymbolsRef.current.has(g.symbol)) {
+                    checkedSymbolsRef.current.add(g.symbol);
+                    addLog(`[SCANNER] Excluding $${g.symbol} (${g.name || 'Unknown'}): contains ETF, Leverage, or Target keyword.`, 'scan', g.symbol);
+                  }
+                  continue;
+                }
+
                 const priceValid = !checkPriceRange || (g.price >= minPrice && g.price <= maxPrice);
                 const gainValid = !checkDailyGain || (g.changesPercentage >= minGainPercent);
 
@@ -449,6 +458,7 @@ export function ExecutionEngine({
               // Check if we checked all the checkable gainers
               const checkableGainers = currentGainers.filter(g =>
                 !blacklist.includes(g.symbol) &&
+                passesTickerFilter(g.symbol, g.name) &&
                 (!checkPriceRange || (g.price >= minPrice && g.price <= maxPrice)) &&
                 (!checkDailyGain || (g.changesPercentage >= minGainPercent))
               );

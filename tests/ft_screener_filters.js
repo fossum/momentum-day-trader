@@ -22,6 +22,13 @@ function passesRvolFilter(rvol) {
   return rvol >= 5.0;
 }
 
+function passesTickerFilter(symbol, name) {
+  const sym = symbol.toUpperCase();
+  const n = (name || '').toUpperCase();
+  const excludedKeywords = ['ETF', 'LEVERAGE', 'TARGET'];
+  return !excludedKeywords.some(keyword => sym.includes(keyword) || n.includes(keyword));
+}
+
 async function runTests() {
   console.log('==================================================');
   console.log('RUNNING SCREENER FILTER FUNCTIONAL TESTS');
@@ -160,6 +167,57 @@ async function runTests() {
     }
   } catch (error) {
     console.error('❌ Test 3 failed:', error.message);
+    process.exitCode = 1;
+  }
+
+  // Test 4: Verify ETF/Leverage/Target ticker exclusion filter
+  try {
+    console.log('\n[TEST] 4. Verifying ETF/Leverage/Target ticker exclusion filter on mock and real data...');
+
+    const testCases = [
+      { symbol: 'DNNG', name: 'Leverage Shares 2x Long DNN Daily ETF', expected: false },
+      { symbol: 'MUZ', name: '2X Short MU ETF', expected: false },
+      { symbol: 'TGT', name: 'Target Corporation', expected: false },
+      { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', expected: false },
+      { symbol: 'AAPL', name: 'Apple Inc.', expected: true },
+      { symbol: 'TSLA', name: 'Tesla, Inc.', expected: true },
+      { symbol: 'SOXL', name: 'Direxion Daily Semiconductor Bull 3X Shares ETF', expected: false },
+      { symbol: 'TQQQ', name: 'ProShares UltraPro QQQ ETF', expected: false },
+      { symbol: 'TARGET1', name: 'Some other Target stock', expected: false }
+    ];
+
+    let allCasesPassed = true;
+    for (const tc of testCases) {
+      const result = passesTickerFilter(tc.symbol, tc.name);
+      if (result !== tc.expected) {
+        console.error(`    Excluding ticker filter failed for $${tc.symbol} (${tc.name}): expected ${tc.expected}, got ${result}`);
+        allCasesPassed = false;
+      } else {
+        console.log(`    ✓ Filter correct for $${tc.symbol} (${tc.name}): got ${result}`);
+      }
+    }
+
+    if (!allCasesPassed) {
+      throw new Error('Some mock filter test cases did not behave as expected');
+    }
+
+    // Apply passesTickerFilter to the fetched gainers
+    const passedTickers = gainers.filter(g => passesBaselineFilter(g.price, g.changesPercentage) && passesTickerFilter(g.symbol, g.name));
+    const excludedTickers = gainers.filter(g => passesBaselineFilter(g.price, g.changesPercentage) && !passesTickerFilter(g.symbol, g.name));
+
+    console.log(`  Real gainers passing baseline AND ticker filters: ${passedTickers.length}`);
+    console.log(`  Real gainers excluded by ETF/Leverage/Target filter: ${excludedTickers.length}`);
+
+    if (excludedTickers.length > 0) {
+      console.log('  Sample excluded real gainers:');
+      excludedTickers.slice(0, 3).forEach(g => {
+        console.log(`    Excluded $${g.symbol} (${g.name || 'Unknown'})`);
+      });
+    }
+
+    console.log('✅ ETF/Leverage/Target exclusion filter tests passed');
+  } catch (error) {
+    console.error('❌ Test 4 failed:', error.message);
     process.exitCode = 1;
   }
 
