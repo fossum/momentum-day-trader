@@ -322,13 +322,21 @@ export function analyzeBullFlag(
               failureReason = `Pullback candle low broke below the 9 EMA`;
             }
           } else {
-            failureReason = `Pullback candles are not all red/doji (close <= open)`;
+            if (maxPullbackGreenCandles > 0) {
+              failureReason = `Pullback candles are not all red/doji (allowing up to ${maxPullbackGreenCandles} micro-green)`;
+            } else {
+              failureReason = `Pullback candles are not all red/doji (close <= open)`;
+            }
           }
         } else {
           failureReason = `Flagpole candles are not making higher highs`;
         }
       } else {
-        failureReason = `Flagpole candles are not all green (close > open)`;
+        if (maxFlagpoleRedCandles > 0) {
+          failureReason = `Flagpole candles are not all green (allowing up to ${maxFlagpoleRedCandles} micro-red/doji)`;
+        } else {
+          failureReason = `Flagpole candles are not all green (close > open)`;
+        }
       }
 
       if (score > bestScore) {
