@@ -3,47 +3,11 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import { FmpApiClient } from "./fmp_client";
 
 dotenv.config();
 
-interface CacheEntry<T> {
-  value: T;
-  expiry: number;
-}
-
-const memoryCache = new Map<string, CacheEntry<any>>();
-
-// Prune expired cache entries every 5 minutes to prevent memory leaks
-const cacheCleanupInterval = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of memoryCache.entries()) {
-    if (now >= entry.expiry) {
-      memoryCache.delete(key);
-    }
-  }
-}, 5 * 60 * 1000);
-if (cacheCleanupInterval && typeof cacheCleanupInterval.unref === 'function') {
-  cacheCleanupInterval.unref();
-}
-
-async function fetchWithCache<T>(url: string, ttlMs: number, headers?: any): Promise<T> {
-  const cached = memoryCache.get(url);
-  if (cached && Date.now() < cached.expiry) {
-    return cached.value;
-  }
-
-  const options = headers ? { headers } : {};
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    throw new Error(`FMP API error: status ${res.status}`);
-  }
-  const data = await res.json();
-  memoryCache.set(url, {
-    value: data,
-    expiry: Date.now() + ttlMs
-  });
-  return data;
-}
+let fmpClient: FmpApiClient;
 
 // Helper to decompose 5-minute candles into 1-minute candles
 function decompose5MinTo1Min(fiveMinCandles: any[]): any[] {
@@ -158,7 +122,7 @@ function generateMock1MinCandles(ticker: string, currentPrice: number): any[] {
 // Helper to fetch live quote price
 async function fetchCurrentPrice(ticker: string, key: string): Promise<number> {
   try {
-    const data = await fetchWithCache<any[]>(
+    const data = await fmpClient.fetchWithCache<any[]>(
       `https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`,
       10000 // 10s cache
     );
@@ -216,11 +180,13 @@ async function startServer() {
     return key;
   };
 
+  fmpClient = new FmpApiClient(getFmpKey());
+
   app.get("/api/stock/:ticker/quote", async (req, res) => {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const data = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000); // 10s
+      const data = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000); // 10s
 
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
@@ -329,7 +295,7 @@ async function startServer() {
       let newsData: any[] = [];
 
       try {
-        const quoteData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000); // 10s
+        const quoteData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000); // 10s
         if (Array.isArray(quoteData) && quoteData.length > 0) {
           quote = quoteData[0];
         }
@@ -338,7 +304,7 @@ async function startServer() {
       }
 
       try {
-        newsData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`, 300000); // 5m
+        newsData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`, 300000); // 5m
       } catch (e: any) {
         console.warn(`FMP news fetch failed for ${ticker}:`, e.message);
       }
@@ -346,7 +312,7 @@ async function startServer() {
       // Fetch stock splits catalyst (within last/upcoming 7 days)
       let splitCatalyst: string | null = null;
       try {
-        const splitsData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/splits?symbol=${ticker}&apikey=${key}`, 3600000); // 1h
+        const splitsData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/splits?symbol=${ticker}&apikey=${key}`, 3600000); // 1h
         if (Array.isArray(splitsData) && splitsData.length > 0) {
           const recentSplit = splitsData.find((s: any) => {
             if (!s.date) return false;
@@ -367,7 +333,7 @@ async function startServer() {
       // Fetch insider trading catalyst (purchases within last 30 days)
       let insiderCatalyst: string | null = null;
       try {
-        const insiderData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/insider-trading/search?symbol=${ticker}&limit=10&apikey=${key}`, 3600000); // 1h
+        const insiderData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/insider-trading/search?symbol=${ticker}&limit=10&apikey=${key}`, 3600000); // 1h
         if (Array.isArray(insiderData) && insiderData.length > 0) {
           const recentPurchase = insiderData.find((t: any) => {
             if (!t.transactionDate || !t.transactionType) return false;
@@ -428,7 +394,7 @@ async function startServer() {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const data = await fetchWithCache(`https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`, 60000); // 1m
+      const data = await fmpClient.fetchWithCache(`https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`, 60000); // 1m
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -441,21 +407,26 @@ async function startServer() {
     let data: any[] = [];
     let isFallback = false;
 
-    // 1. Try fetching real 1-minute candles
-    try {
-      data = await fetchWithCache<any[]>(
-        `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`,
-        60000 // 1 minute cache
-      );
-    } catch (err: any) {
-      console.warn(`[FMP 1MIN CHART ERROR] Failed for ${ticker}: ${err.message}. Attempting 5-min fallback...`);
+    // 1. Try fetching real 1-minute candles (only if 1min API is supported)
+    if (fmpClient.is1MinUnsupported) {
       isFallback = true;
+    } else {
+      try {
+        data = await fmpClient.fetchWithCache<any[]>(
+          `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`,
+          60000, // 1 minute cache
+          { is1Min: true }
+        );
+      } catch (err: any) {
+        console.warn(`[FMP 1MIN CHART ERROR] Failed for ${ticker}: ${err.message}. Attempting 5-min fallback...`);
+        isFallback = true;
+      }
     }
 
     // 2. Fallback to 5-min chart decomposition if 1-min chart failed or returned empty
     if (isFallback || !Array.isArray(data) || data.length === 0) {
       try {
-        const fiveMinData = await fetchWithCache<any[]>(
+        const fiveMinData = await fmpClient.fetchWithCache<any[]>(
           `https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`,
           60000 // 1 minute cache
         );
@@ -485,10 +456,8 @@ async function startServer() {
           const localEmaValues = computeLocalEma(chronological, 9);
 
           const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
-          const emaApiRes = await fetch(emaApiUrl);
-          if (emaApiRes.ok) {
-            const fmpEmaData = await emaApiRes.json();
-            if (Array.isArray(fmpEmaData)) {
+          const fmpEmaData = await fmpClient.fetchWithCache<any[]>(emaApiUrl, 0);
+          if (Array.isArray(fmpEmaData)) {
               const fmpEmaMap = new Map<string, number>();
               fmpEmaData.forEach((item: any) => {
                 if (item.date && item.ema !== undefined && item.ema !== null) {
@@ -517,7 +486,6 @@ async function startServer() {
               }
             }
           }
-        }
       } catch (emaCheckError: any) {
         console.warn(`EMA check verification failed for ${ticker}:`, emaCheckError.message);
       }
@@ -530,7 +498,7 @@ async function startServer() {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const data = await fetchWithCache(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=20&apikey=${key}`, 300000); // 5m
+      const data = await fmpClient.fetchWithCache(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=20&apikey=${key}`, 300000); // 5m
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -540,7 +508,7 @@ async function startServer() {
   app.get("/api/market/gainers", async (req, res) => {
     try {
       const key = getFmpKey();
-      const data = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`, 30000); // 30s
+      const data = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`, 30000); // 30s
 
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
@@ -567,14 +535,14 @@ async function startServer() {
       const todayStr = `${year}-${month}-${day}`;
 
       // 1. Fetch global exchange market hours for NASDAQ
-      const hoursData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/exchange-market-hours?exchange=NASDAQ&apikey=${key}`, 300000); // 5m
+      const hoursData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/exchange-market-hours?exchange=NASDAQ&apikey=${key}`, 300000); // 5m
       const marketHours = Array.isArray(hoursData) && hoursData.length > 0 ? hoursData[0] : null;
 
       // 2. Fetch holiday calendar for today
       let isHoliday = false;
       let holidayName: string | null = null;
       try {
-        const holidaysData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/holidays-by-exchange?exchange=NASDAQ&from=${todayStr}&to=${todayStr}&apikey=${key}`, 300000); // 5m
+        const holidaysData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/holidays-by-exchange?exchange=NASDAQ&from=${todayStr}&to=${todayStr}&apikey=${key}`, 300000); // 5m
         if (Array.isArray(holidaysData) && holidaysData.length > 0) {
           const holiday = holidaysData.find((h: any) => h.isClosed);
           if (holiday) {
