@@ -155,3 +155,19 @@ FMP has deprecated legacy `/api/v3/*` endpoints for newly generated API keys, re
     }
   ]
   ```
+
+## 7. FMP API Error Handling & Subscription Constraints
+
+Further documentation: https://site.financialmodelingprep.com/developer/docs/quickstart
+When interacting with FMP APIs, the following HTTP status codes commonly indicate credentials or subscription entitlement issues:
+
+*   **HTTP 402 (Payment Required):**
+    *   **Meaning:** The requested endpoint or dataset (e.g., 1-minute historical charts) is not supported under the user's current subscription plan tier (e.g., Free, Starter), or the daily request limit has been exhausted.
+    *   **Handling Strategy:** Log the error clearly noting that the request is not supported by the FMP subscription, then dynamically bypass the endpoint (e.g., setting a bypass flag) and fall back to another data source or a lower-resolution chart (e.g., decomposing 5-minute historical charts into 1-minute candles) to avoid API call spam and log clutter.
+*   **HTTP 403 (Forbidden):**
+    *   **Meaning:** Attempting to access a deprecated legacy `/api/v3/*` endpoint with a newly generated key.
+    *   **Handling Strategy:** Ensure the stable endpoint path `/stable/*` is being queried.
+*   **HTTP 429 (Too Many Requests):**
+    *   **Meaning:** The user has exceeded the daily request limit for the current FMP API key. FMP provides separate daily quotas for different data types (e.g., 5000 requests/day for `/stable/historical-chart/*`, 500 requests/day for `/stable/quote/*`).
+    *   **Handling Strategy:** Log that the daily request limit has been exceeded. Implement client-side caching strategies (e.g., 1-minute cache for quotes, 5-minute cache for historical charts) to minimize redundant requests. For 1-minute historical chart requests that return 429 errors, the system automatically falls back to decomposing 5-minute historical charts to prevent continuous API call spam.
+
