@@ -15,6 +15,7 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 // Use the specific databaseId for AI Studio
 export const db = getFirestore(app, "ai-studio-ebb825e0-d58e-4b6d-b706-1ca47c3b3065");
+export const DEFAULT_USER_ID = 'testuser';
 
 async function computeHash(text: string): Promise<string> {
   const normalized = text.trim().toLowerCase();

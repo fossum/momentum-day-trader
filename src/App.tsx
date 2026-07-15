@@ -6,13 +6,13 @@
 import { useState, useEffect } from 'react';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard';
-import { auth } from './lib/firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { DEFAULT_USER_ID } from './lib/firebase';
+import { User } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 
 export default function App() {
   // Bypass auth for verification script purposes by pretending user is logged in
-  const [user, setUser] = useState<User | null>({ uid: 'testuser' } as unknown as User);
+  const [user, setUser] = useState<User | null>({ uid: DEFAULT_USER_ID } as unknown as User);
   const [loading, setLoading] = useState(false);
 
   /* Original Code

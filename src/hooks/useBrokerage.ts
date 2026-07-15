@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { UserPreferences } from '../types';
-import { auth } from '../lib/firebase';
+import { auth, DEFAULT_USER_ID } from '../lib/firebase';
 
 export function useBrokerage(
   preferences: UserPreferences,
@@ -168,7 +168,7 @@ export function useBrokerage(
         'x-lightspeed-key': preferences.lightspeedKey || '',
         'x-ibkr-url': preferences.ibkrUrl || '',
         'x-approved-ibkr-warnings': (preferences.approvedIbkrWarnings || []).join(','),
-        'x-user-id': auth.currentUser?.uid || ''
+        'x-user-id': auth.currentUser?.uid || DEFAULT_USER_ID
       },
       body: JSON.stringify({
         brokerage: preferences.brokerage,
@@ -196,7 +196,7 @@ export function useBrokerage(
         'Content-Type': 'application/json',
         'x-ibkr-url': preferences.ibkrUrl || '',
         'x-approved-ibkr-warnings': (preferences.approvedIbkrWarnings || []).join(','),
-        'x-user-id': auth.currentUser?.uid || ''
+        'x-user-id': auth.currentUser?.uid || DEFAULT_USER_ID
       },
       body: JSON.stringify({
         promptId,

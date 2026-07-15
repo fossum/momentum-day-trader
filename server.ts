@@ -720,6 +720,41 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Check if log file exists for a user
+  app.get("/api/logs/exists", (req, res) => {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    // Prevent path traversal
+    if (userId.includes("..") || userId.includes("/") || userId.includes("\\")) {
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+    const logsDir = path.join(process.cwd(), "logs");
+    const logFilePath = path.join(logsDir, `${userId}.log`);
+    const exists = fs.existsSync(logFilePath);
+    res.json({ exists });
+  });
+
+  // Download log file for a user
+  app.get("/api/logs/download", (req, res) => {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    // Prevent path traversal
+    if (userId.includes("..") || userId.includes("/") || userId.includes("\\")) {
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+    const logsDir = path.join(process.cwd(), "logs");
+    const logFilePath = path.join(logsDir, `${userId}.log`);
+    if (!fs.existsSync(logFilePath)) {
+      return res.status(404).json({ error: "Log file not found" });
+    }
+    res.download(logFilePath, `${userId}.log`);
+  });
+
+
   // Brokerage API Proxies
   app.get("/api/broker/trades", async (req, res) => {
     try {
