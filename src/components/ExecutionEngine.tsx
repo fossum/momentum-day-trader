@@ -529,6 +529,7 @@ export function ExecutionEngine({
               // Gemini news sentiment analysis check (if enabled and we have news to check)
               let geminiPass = true;
               let geminiReason = "";
+              let isTechnicalBreakout = false;
               if (checkGeminiSentiment) {
                 const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
                 if (hasActualNews) {
@@ -554,14 +555,24 @@ export function ExecutionEngine({
                           isPositive: geminiPass,
                           reason: geminiReason
                         });
+                      } else if (res.status === 500) {
+                        geminiPass = true;
+                        geminiReason = "Technical Breakout Only (500 Error)";
+                        isTechnicalBreakout = true;
                       } else {
                         geminiPass = false;
                         geminiReason = `Sentiment API returned status ${res.status}`;
                       }
                     }
                   } catch (err: any) {
-                    geminiPass = false;
-                    geminiReason = `Sentiment check failed: ${err.message}`;
+                    if (err.message?.includes("500")) {
+                      geminiPass = true;
+                      geminiReason = "Technical Breakout Only (500 Error)";
+                      isTechnicalBreakout = true;
+                    } else {
+                      geminiPass = false;
+                      geminiReason = `Sentiment check failed: ${err.message}`;
+                    }
                   }
                 } else {
                   geminiPass = false;
@@ -735,7 +746,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                   ticker: selectedGainer.symbol,
                   float: floatDisplay,
                   catalyst: liveData.catalyst || '',
-                  setup: 'Bull Flag',
+                  setup: isTechnicalBreakout ? 'Technical Breakout Only' : 'Bull Flag',
                   entryPrice: parseFloat(entryPrice.toFixed(2)),
                   shares: computedShares,
                   target: targetPrice,
@@ -756,6 +767,12 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
           case 1: // CATALYST VALIDATION — Require a fundamental news driver
             if (activeTrade) {
+              if (activeTrade.setup === 'Technical Breakout Only') {
+                addLog(`[CATALYST] Bypassed news catalyst validation for $${activeTrade.ticker} (Technical Breakout Only triggered)`, 'info', activeTrade.ticker);
+                changeStep(2);
+                break;
+              }
+
               const catalystValidation = preferencesRef.current.catalystValidation ?? 'gemini';
               const checkNewsCatalyst = catalystValidation === 'keywords';
               const checkGeminiSentiment = catalystValidation === 'gemini';
@@ -809,6 +826,15 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                         })
                       });
                       if (!res.ok) {
+                        if (res.status === 500) {
+                          addLog(`[GEMINI ERROR] Sentiment API returned status 500. Flagging $${activeTrade.ticker} as Technical Breakout Only.`, 'warn', activeTrade.ticker);
+                          await updateCurrentTrade({
+                            ...activeTrade,
+                            setup: 'Technical Breakout Only'
+                          });
+                          changeStep(2);
+                          return;
+                        }
                         throw new Error(`Server returned status ${res.status}`);
                       }
                       const data = await res.json();
@@ -829,9 +855,18 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                       });
                     }
                   } catch (err: any) {
-                    addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
-                    const success = await runKeywordFallback(err.message);
-                    if (!success) return;
+                    if (err.message?.includes("500")) {
+                      addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Flagging $${activeTrade.ticker} as Technical Breakout Only.`, 'warn', activeTrade.ticker);
+                      await updateCurrentTrade({
+                        ...activeTrade,
+                        setup: 'Technical Breakout Only'
+                      });
+                      changeStep(2);
+                    } else {
+                      addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Falling back to keyword validation.`, 'warn', activeTrade.ticker);
+                      const success = await runKeywordFallback(err.message);
+                      if (!success) return;
+                    }
                   }
                 } else {
                   addLog(`[ABORT] No news catalyst found for $${activeTrade.ticker}. Skipping trade.`, 'warn', activeTrade.ticker);
@@ -973,7 +1008,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
               const setupTrade: SimulatedTrade = {
                 ...activeTrade,
-                setup: 'Bull Flag',
+                setup: activeTrade.setup || 'Bull Flag',
                 entryPrice: parseFloat(entryPrice.toFixed(2)),
                 shares: computedShares,
                 target: targetPrice,
