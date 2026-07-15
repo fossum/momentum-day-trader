@@ -1,5 +1,5 @@
 export const MAX_STOP_DISTANCE_DEFAULT = 0.20;
-export const MIN_STOP_DISTANCE_DEFAULT = 0.05;
+export const MIN_STOP_DISTANCE_DEFAULT = 0.01;
 export const MIN_REWARD_RISK_RATIO_DEFAULT = 2.0;
 
 /**

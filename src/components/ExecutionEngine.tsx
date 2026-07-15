@@ -575,7 +575,7 @@ export function ExecutionEngine({
               let passesPattern = false;
               let patternReason = "";
               let patternResult: any = null;
-              const minStopDistance = preferencesRef.current.minStopDistance ?? 0.05;
+              const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
               if (checkBullFlagPattern) {
                 if (Array.isArray(candles) && candles.length >= 4) {
                   const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
@@ -899,7 +899,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
                 const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
                 const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
-                const minStopDistance = preferencesRef.current.minStopDistance ?? 0.05;
+                const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
                 patternResult = detectBullFlag(
                   sorted,
                   livePrice,
@@ -921,7 +921,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
               // Configuration limits
               const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
-              const minStopDistance = preferencesRef.current.minStopDistance ?? 0.05;
+              const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
               const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
 
               // Entry & Stop calculations

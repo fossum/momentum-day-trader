@@ -90,7 +90,7 @@ export function detectBullFlag(
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
   maxPullbackGreenCandles: number = 1,
-  minStopDistance: number = 0.05
+  minStopDistance: number = 0.01
 ): BullFlagResult | null {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -208,7 +208,7 @@ export function analyzeBullFlag(
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
   maxPullbackGreenCandles: number = 1,
-  minStopDistance: number = 0.05
+  minStopDistance: number = 0.01
 ): BullFlagDiagnostic {
   if (candles.length === 0) return { detected: false, reason: "No candle data" };
   const lastDate = getDatePart(candles[candles.length - 1].date);

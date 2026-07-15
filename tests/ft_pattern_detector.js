@@ -28,7 +28,7 @@ const CATALYST_KEYWORDS = [
 ];
 
 const MAX_STOP_DISTANCE = 0.20;
-const MIN_STOP_DISTANCE = 0.05;
+const MIN_STOP_DISTANCE = 0.01;
 const MIN_REWARD_RISK_RATIO = 2.0;
 
 function calculate9EMA(candles, period = 9) {
@@ -516,13 +516,13 @@ async function runTests() {
   }
 
   {
-    // Test 17.2: Stop distance too narrow ($0.01)
-    assert(validateStopDistance(5.00, 4.99) === false, 'Rejects $0.01 stop distance (below minimum)');
+    // Test 17.2: Stop distance too narrow ($0.00)
+    assert(validateStopDistance(5.00, 5.00) === false, 'Rejects $0.00 stop distance (below minimum)');
   }
 
   {
-    // Test 17.3: Exactly $0.05 stop distance (boundary)
-    assert(validateStopDistance(5.00, 4.95) === true, 'Accepts $0.05 stop distance (boundary)');
+    // Test 17.3: Exactly $0.01 stop distance (boundary)
+    assert(validateStopDistance(5.00, 4.99) === true, 'Accepts $0.01 stop distance (boundary)');
   }
 
   // ----- Target / R:R Calculation Tests -----
@@ -564,8 +564,8 @@ async function runTests() {
   }
 
   {
-    // Test 21.1: Invalid setup (stop distance too narrow $0.01)
-    const result = calculateTarget(5.00, 4.99);
+    // Test 21.1: Invalid setup (stop distance too narrow $0.00)
+    const result = calculateTarget(5.00, 5.00);
     assert(result === null, 'Returns null for stop distance below minimum');
   }
 
