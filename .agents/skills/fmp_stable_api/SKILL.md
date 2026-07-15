@@ -163,11 +163,19 @@ When interacting with FMP APIs, the following HTTP status codes commonly indicat
 
 *   **HTTP 402 (Payment Required):**
     *   **Meaning:** The requested endpoint or dataset (e.g., 1-minute historical charts) is not supported under the user's current subscription plan tier (e.g., Free, Starter), or the daily request limit has been exhausted.
-    *   **Handling Strategy:** Log the error clearly noting that the request is not supported by the FMP subscription, then dynamically bypass the endpoint (e.g., setting a bypass flag) and fall back to another data source or a lower-resolution chart (e.g., decomposing 5-minute historical charts into 1-minute candles) to avoid API call spam and log clutter.
+    *   **Handling Strategy:** Log the error clearly noting that the request is not supported by the FMP subscription, then dynamically bypass the endpoint (e.g., setting a bypass flag) and fall back to another data source or a lower-resolution chart.
 *   **HTTP 403 (Forbidden):**
     *   **Meaning:** Attempting to access a deprecated legacy `/api/v3/*` endpoint with a newly generated key.
     *   **Handling Strategy:** Ensure the stable endpoint path `/stable/*` is being queried.
 *   **HTTP 429 (Too Many Requests):**
-    *   **Meaning:** The user has exceeded the daily request limit for the current FMP API key. FMP provides separate daily quotas for different data types (e.g., 5000 requests/day for `/stable/historical-chart/*`, 500 requests/day for `/stable/quote/*`).
-    *   **Handling Strategy:** Log that the daily request limit has been exceeded. Implement client-side caching strategies (e.g., 1-minute cache for quotes, 5-minute cache for historical charts) to minimize redundant requests. For 1-minute historical chart requests that return 429 errors, the system automatically falls back to decomposing 5-minute historical charts to prevent continuous API call spam.
+    *   **Meaning:** The user has exceeded the daily request limit for the current FMP API key.
+    *   **Handling Strategy:** Log that the daily request limit has been exceeded. Implement client-side caching strategies.
 
+## 8. Historical Chart Fallbacks (decompose & mock)
+
+The live momentum algorithm strictly requires a sequence of 1-minute OHLCV candles to function. Due to the subscription constraints and API limits of FMP, the `fmp_client.ts` wrapper exports specialized fallback functions to ensure the algorithm never crashes from missing data:
+
+1. **`decompose5MinTo1Min(fiveMinCandles)`:**
+   If a 1-minute chart request fails (402, 429), the engine requests the 5-minute chart (`/stable/historical-chart/5min`). If successful, this function decomposes each 5-minute candle into five simulated 1-minute candles.
+2. **`generateMock1MinCandles(ticker, currentPrice)`:**
+   If both the 1-minute and 5-minute chart requests fail, this acts as the final failsafe. It generates a flat, backwards-looking sequence of 120 mock candles based on the current live spot price. This synthetic history allows the momentum calculations to safely process the ticker without throwing `undefined` errors (while ensuring it correctly fails the pattern requirements).

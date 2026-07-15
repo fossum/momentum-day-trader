@@ -5,7 +5,7 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import fs from "fs";
 import { analyzeNewsSentiment } from "./src/lib/gemini";
-import { FmpApiClient } from "./fmp_client";
+import { FmpApiClient, decompose5MinTo1Min, generateMock1MinCandles } from "./fmp_client";
 
 dotenv.config();
 
@@ -66,115 +66,7 @@ function logUserDecision(userId: string | undefined, message: string, level: str
 
 let fmpClient: FmpApiClient;
 
-// Helper to decompose 5-minute candles into 1-minute candles
-function decompose5MinTo1Min(fiveMinCandles: any[]): any[] {
-  const oneMinCandles: any[] = [];
-  for (const c5 of fiveMinCandles) {
-    if (!c5.date || c5.open === undefined || c5.close === undefined) continue;
 
-    const dateParts = c5.date.split(' ');
-    if (dateParts.length !== 2) {
-      oneMinCandles.push(c5);
-      continue;
-    }
-    const [ymd, hms] = dateParts;
-    const [year, month, day] = ymd.split('-').map(Number);
-    const [hours, minutes, seconds] = hms.split(':').map(Number);
-
-    const baseDate = new Date(year, month - 1, day, hours, minutes, seconds);
-    if (isNaN(baseDate.getTime())) {
-      oneMinCandles.push(c5);
-      continue;
-    }
-
-    const open = parseFloat(c5.open);
-    const close = parseFloat(c5.close);
-    const high = parseFloat(c5.high);
-    const low = parseFloat(c5.low);
-    const vol = parseFloat(c5.volume) || 0;
-
-    const isGreen = close >= open;
-    const prices: number[] = [open];
-
-    if (isGreen) {
-      prices.push(low + (open - low) * 0.5);
-      prices.push(low);
-      prices.push(high - (high - close) * 0.5);
-      prices.push(high);
-      prices.push(close);
-    } else {
-      prices.push(high - (high - open) * 0.5);
-      prices.push(high);
-      prices.push(low + (close - low) * 0.5);
-      prices.push(low);
-      prices.push(close);
-    }
-
-    for (let m = 0; m < 5; m++) {
-      const candleDate = new Date(baseDate.getTime() + m * 60000);
-
-      const cYear = candleDate.getFullYear();
-      const cMonth = String(candleDate.getMonth() + 1).padStart(2, '0');
-      const cDay = String(candleDate.getDate()).padStart(2, '0');
-      const cHours = String(candleDate.getHours()).padStart(2, '0');
-      const cMinutes = String(candleDate.getMinutes()).padStart(2, '0');
-      const cSeconds = String(candleDate.getSeconds()).padStart(2, '0');
-      const dateStr = `${cYear}-${cMonth}-${cDay} ${cHours}:${cMinutes}:${cSeconds}`;
-
-      const cOpen = prices[m];
-      const cClose = prices[m + 1] !== undefined ? prices[m + 1] : close;
-      const cHigh = Math.max(cOpen, cClose);
-      const cLow = Math.min(cOpen, cClose);
-      const cVol = Math.round((vol / 5) * (0.8 + 0.4 * Math.random()));
-
-      oneMinCandles.push({
-        date: dateStr,
-        open: parseFloat(cOpen.toFixed(4)),
-        high: parseFloat(cHigh.toFixed(4)),
-        low: parseFloat(cLow.toFixed(4)),
-        close: parseFloat(cClose.toFixed(4)),
-        volume: cVol
-      });
-    }
-  }
-  return oneMinCandles;
-}
-
-// Helper to generate mock 1-minute candles from a starting price
-function generateMock1MinCandles(ticker: string, currentPrice: number): any[] {
-  const candles: any[] = [];
-  let price = currentPrice;
-  const now = new Date();
-  for (let i = 0; i < 120; i++) {
-    const candleDate = new Date(now.getTime() - i * 60000);
-    const cYear = candleDate.getFullYear();
-    const cMonth = String(candleDate.getMonth() + 1).padStart(2, '0');
-    const cDay = String(candleDate.getDate()).padStart(2, '0');
-    const cHours = String(candleDate.getHours()).padStart(2, '0');
-    const cMinutes = String(candleDate.getMinutes()).padStart(2, '0');
-    const cSeconds = String(candleDate.getSeconds()).padStart(2, '0');
-    const dateStr = `${cYear}-${cMonth}-${cDay} ${cHours}:${cMinutes}:${cSeconds}`;
-
-    const percentChange = (Math.random() - 0.48) * 0.005; // -0.24% to +0.26%
-    const open = price;
-    const close = price * (1 + percentChange);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.002);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.002);
-    const volume = Math.floor(5000 + Math.random() * 20000);
-
-    candles.push({
-      date: dateStr,
-      open: parseFloat(open.toFixed(4)),
-      high: parseFloat(high.toFixed(4)),
-      low: parseFloat(low.toFixed(4)),
-      close: parseFloat(close.toFixed(4)),
-      volume
-    });
-
-    price = close;
-  }
-  return candles;
-}
 
 // Helper to fetch live quote price
 async function fetchCurrentPrice(ticker: string, key: string): Promise<number> {
