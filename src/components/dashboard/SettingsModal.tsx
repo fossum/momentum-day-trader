@@ -44,7 +44,9 @@ export function SettingsModal({
       minRvol: 5.0,
       maxFloatMillions: 20,
       maxStopDistance: 0.20,
+      minStopDistance: 0.05,
       minRewardRiskRatio: 2.0,
+      maxProximityPercent: 2.0,
       simulationSpeed: 6000,
       catalystValidation: 'gemini',
       checkPriceRange: true,
@@ -54,7 +56,9 @@ export function SettingsModal({
       checkTradingWindow: true,
       checkBullFlagPattern: true,
       checkStopDistance: true,
-      checkRiskReward: true
+      checkRiskReward: true,
+      maxFlagpoleRedCandles: 1,
+      maxPullbackGreenCandles: 1
     });
   };
 
@@ -175,6 +179,60 @@ export function SettingsModal({
                   />
                 </div>
               </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Min Stop Dist ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={preferences.minStopDistance ?? 0.05}
+                    onChange={(e) => setPreferences({ ...preferences, minStopDistance: parseFloat(e.target.value) || 0.05 })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Proximity (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={preferences.maxProximityPercent ?? 2.0}
+                    onChange={(e) => setPreferences({ ...preferences, maxProximityPercent: parseFloat(e.target.value) || 2.0 })}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Flagpole Red Candles</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="3"
+                    value={preferences.maxFlagpoleRedCandles ?? 1}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setPreferences({ ...preferences, maxFlagpoleRedCandles: isNaN(val) ? 0 : val });
+                    }}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Max Pullback Green Candles</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="4"
+                    value={preferences.maxPullbackGreenCandles ?? 1}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setPreferences({ ...preferences, maxPullbackGreenCandles: isNaN(val) ? 0 : val });
+                    }}
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
 
             <label className="block text-sm font-medium text-zinc-300 mb-3 mt-4">
@@ -276,7 +334,7 @@ export function SettingsModal({
                       onChange={() => setPreferences({ ...preferences, catalystValidation: 'gemini' })}
                       className="h-4 w-4 border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
                     />
-                    <span>Gemini Sentiment (Requires keyword match first)</span>
+                    <span>Gemini Sentiment</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-300 select-none">
                     <input

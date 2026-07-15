@@ -28,6 +28,7 @@ const CATALYST_KEYWORDS = [
 ];
 
 const MAX_STOP_DISTANCE = 0.20;
+const MIN_STOP_DISTANCE = 0.05;
 const MIN_REWARD_RISK_RATIO = 2.0;
 
 function calculate9EMA(candles, period = 9) {
@@ -57,18 +58,86 @@ function calculate9EMA(candles, period = 9) {
   return emaValues;
 }
 
-function detectBullFlag(candles) {
-  if (candles.length < 4) return null;
+function getDatePart(dateStr) {
+  if (!dateStr) return '';
+  if (!dateStr.includes('-') && !dateStr.includes('/')) {
+    // If it doesn't look like a date (e.g., in time-only tests), treat them all as the same date
+    return 'same-date';
+  }
+  if (dateStr.includes(' ')) {
+    return dateStr.split(' ')[0];
+  }
+  if (dateStr.includes('T')) {
+    return dateStr.split('T')[0];
+  }
+  return dateStr;
+}
 
+function isMicroRedOrDoji(c) {
+  if (c.close > c.open) return false;
+  const body = c.open - c.close;
+  const relativeBody = body / c.open;
+  // Body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
+function isMicroGreenOrDoji(c) {
+  if (c.close <= c.open + 0.005) return true; // Standard red/doji is already conforming
+  const body = c.close - c.open;
+  const relativeBody = body / c.open;
+  // Green body <= $0.02 OR relative change <= 0.2% of open price
+  return body <= 0.02 || relativeBody <= 0.002;
+}
+
+function findNextResistance(candles, flagpoleStartIdx, entryPrice) {
+  const priorCandles = candles.slice(0, flagpoleStartIdx);
+  if (priorCandles.length === 0) return undefined;
+
+  const peaks = [];
+  
+  // Find local peaks in prior candles (maximum of 3-candle window)
+  for (let i = 1; i < priorCandles.length - 1; i++) {
+    const cur = priorCandles[i].high;
+    const prev = priorCandles[i - 1].high;
+    const next = priorCandles[i + 1].high;
+    if (cur > prev && cur >= next) {
+      peaks.push(cur);
+    }
+  }
+
+  // Also include the absolute daily high of the prior candles
+  const absoluteHigh = Math.max(...priorCandles.map(c => c.high));
+  if (absoluteHigh > entryPrice && !peaks.includes(absoluteHigh)) {
+    peaks.push(absoluteHigh);
+  }
+
+  const validTargets = peaks.filter(p => p > entryPrice);
+  if (validTargets.length === 0) return undefined;
+
+  return Math.min(...validTargets);
+}
+
+function detectBullFlag(candles, currentPrice, maxProximityPercent = 2.0, maxFlagpoleRedCandles = 1, maxPullbackGreenCandles = 1, minStopDistance = MIN_STOP_DISTANCE) {
+  if (candles.length === 0) return null;
+  const lastDate = getDatePart(candles[candles.length - 1].date);
+  const filtered = candles.filter(c => getDatePart(c.date) === lastDate);
+  if (filtered.length < 4) return null;
+
+  candles = filtered;
   const emaValues = calculate9EMA(candles);
 
-  for (let pullbackEnd = candles.length - 1; pullbackEnd >= 4; pullbackEnd--) {
+  const maxScanDepth = Math.max(4, candles.length - 10);
+  for (let pullbackEnd = candles.length - 1; pullbackEnd >= maxScanDepth; pullbackEnd--) {
     for (let pullbackLen = 2; pullbackLen <= 4 && pullbackLen <= pullbackEnd; pullbackLen++) {
       const pullbackStart = pullbackEnd - pullbackLen + 1;
       const pullbackCandles = candles.slice(pullbackStart, pullbackEnd + 1);
 
-      const allRedOrDoji = pullbackCandles.every(c => c.close <= c.open + 0.005);
-      if (!allRedOrDoji) continue;
+      let pullbackColorPass = false;
+      const greenCandles = pullbackCandles.filter(c => c.close > c.open + 0.005);
+      if (greenCandles.length <= maxPullbackGreenCandles) {
+        pullbackColorPass = greenCandles.every(isMicroGreenOrDoji);
+      }
+      if (!pullbackColorPass) continue;
 
       const pullbackHoldsEma = pullbackCandles.every((c, i) => {
         const emaIdx = pullbackStart + i;
@@ -80,8 +149,17 @@ function detectBullFlag(candles) {
         const flagpoleStart = pullbackStart - flagpoleLen;
         const flagpoleCandles = candles.slice(flagpoleStart, pullbackStart);
 
-        const allGreen = flagpoleCandles.every(c => c.close > c.open);
-        if (!allGreen) continue;
+        let flagpoleColorPass = false;
+        const nonGreenCandles = flagpoleCandles.filter(c => c.close <= c.open);
+        if (nonGreenCandles.length <= maxFlagpoleRedCandles) {
+          flagpoleColorPass = nonGreenCandles.every(isMicroRedOrDoji);
+        }
+        if (flagpoleColorPass && flagpoleCandles.length > 1) {
+          if (flagpoleCandles[flagpoleCandles.length - 1].close <= flagpoleCandles[0].open) {
+            flagpoleColorPass = false;
+          }
+        }
+        if (!flagpoleColorPass) continue;
 
         let makingNewHighs = true;
         for (let i = 1; i < flagpoleCandles.length; i++) {
@@ -101,12 +179,27 @@ function detectBullFlag(candles) {
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
 
+        // Reject negative, zero, or too narrow stops
+        if (resistanceLevel - pullbackLow < minStopDistance) {
+          continue;
+        }
+
+        // Proximity Check
+        const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+        const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+        if (pctDiff > (maxProximityPercent / 100)) {
+          continue;
+        }
+
+        const nextResistance = findNextResistance(candles, flagpoleStart, resistanceLevel);
+
         return {
           detected: true,
           resistanceLevel,
           pullbackLow,
           flagpoleCandles,
-          pullbackCandles
+          pullbackCandles,
+          nextResistance
         };
       }
     }
@@ -115,16 +208,16 @@ function detectBullFlag(candles) {
   return null;
 }
 
-function validateStopDistance(entryPrice, pullbackLow) {
+function validateStopDistance(entryPrice, pullbackLow, maxStopDistance = MAX_STOP_DISTANCE, minStopDistance = MIN_STOP_DISTANCE) {
   const stopDistance = Number((entryPrice - pullbackLow).toFixed(2));
-  return stopDistance > 0 && stopDistance <= MAX_STOP_DISTANCE;
+  return stopDistance >= minStopDistance && stopDistance <= maxStopDistance;
 }
 
-function calculateTarget(entryPrice, stopPrice, resistanceLevel) {
+function calculateTarget(entryPrice, stopPrice, resistanceLevel, minRewardRiskRatio = MIN_REWARD_RISK_RATIO, minStopDistance = MIN_STOP_DISTANCE) {
   const stopDistance = entryPrice - stopPrice;
-  if (stopDistance <= 0) return null;
+  if (stopDistance < minStopDistance) return null;
 
-  const minTarget = entryPrice + stopDistance * MIN_REWARD_RISK_RATIO;
+  const minTarget = entryPrice + stopDistance * minRewardRiskRatio;
 
   if (resistanceLevel !== undefined && resistanceLevel >= minTarget) {
     const ratio = (resistanceLevel - entryPrice) / stopDistance;
@@ -133,7 +226,7 @@ function calculateTarget(entryPrice, stopPrice, resistanceLevel) {
 
   return {
     targetPrice: parseFloat(minTarget.toFixed(2)),
-    ratio: MIN_REWARD_RISK_RATIO
+    ratio: minRewardRiskRatio
   };
 }
 
@@ -249,7 +342,7 @@ async function runTests() {
       { date: '09:40', open: 5.65, high: 5.68, low: 5.55, close: 5.60, volume: 70000 },
     ];
 
-    const result = detectBullFlag(candles);
+    const result = detectBullFlag(candles, undefined, 5.0);
     assert(result !== null, 'Detects valid bull flag pattern');
     if (result) {
       assert(result.detected === true, 'detected flag is true');
@@ -258,6 +351,10 @@ async function runTests() {
       assert(result.flagpoleCandles.length >= 2, 'Flagpole has 2+ candles');
       assert(result.pullbackCandles.length >= 2, 'Pullback has 2+ candles');
     }
+
+    // Test 4.1: Default proximity check (2.0%) should reject this setup (pullback close 5.60 vs resistance 5.80 is 3.45%)
+    const resultDefault = detectBullFlag(candles);
+    assert(resultDefault === null, 'Rejects bull flag when default 2% proximity check is exceeded');
   }
 
   {
@@ -290,6 +387,56 @@ async function runTests() {
     ];
     const result = detectBullFlag(candles);
     assert(result === null, 'Returns null with insufficient candles');
+  }
+
+  {
+    // Test 6.1: Valid pattern with 1 micro-red candle in flagpole (when maxFlagpoleRedCandles is 1)
+    const candles = [
+      { date: '09:30', open: 5.0, high: 5.1, low: 4.9, close: 5.05, volume: 50000 },
+      { date: '09:31', open: 5.05, high: 5.15, low: 5.0, close: 5.10, volume: 55000 },
+      { date: '09:32', open: 5.10, high: 5.20, low: 5.05, close: 5.15, volume: 50000 },
+      { date: '09:33', open: 5.15, high: 5.25, low: 5.10, close: 5.20, volume: 50000 },
+      { date: '09:34', open: 5.20, high: 5.30, low: 5.15, close: 5.25, volume: 50000 },
+      { date: '09:35', open: 5.25, high: 5.35, low: 5.20, close: 5.30, volume: 50000 },
+      { date: '09:36', open: 5.30, high: 5.40, low: 5.25, close: 5.35, volume: 50000 },
+      // Flagpole: 1 green candle, 1 micro-red candle, making new high
+      { date: '09:37', open: 5.35, high: 5.60, low: 5.30, close: 5.55, volume: 500000 },
+      { date: '09:38', open: 5.55, high: 5.80, low: 5.50, close: 5.54, volume: 600000 }, // micro-red body 0.01 (1 cent)
+      // Pullback: 2 red candles
+      { date: '09:39', open: 5.54, high: 5.55, low: 5.45, close: 5.46, volume: 80000 },
+      { date: '09:40', open: 5.46, high: 5.48, low: 5.40, close: 5.42, volume: 70000 },
+    ];
+
+    const resultRelaxed = detectBullFlag(candles, undefined, 7.0, 1, 1);
+    assert(resultRelaxed !== null, 'Accepts flagpole with 1 micro-red candle under relaxed mode');
+
+    const resultStrict = detectBullFlag(candles, undefined, 7.0, 0, 1);
+    assert(resultStrict === null, 'Rejects flagpole with 1 micro-red candle under strict mode');
+  }
+
+  {
+    // Test 6.2: Valid pattern with 1 micro-green candle in pullback (when maxPullbackGreenCandles is 1)
+    const candles = [
+      { date: '09:30', open: 5.0, high: 5.1, low: 4.9, close: 5.05, volume: 50000 },
+      { date: '09:31', open: 5.05, high: 5.15, low: 5.0, close: 5.10, volume: 55000 },
+      { date: '09:32', open: 5.10, open: 5.10, high: 5.20, low: 5.05, close: 5.15, volume: 50000 },
+      { date: '09:33', open: 5.15, high: 5.25, low: 5.10, close: 5.20, volume: 50000 },
+      { date: '09:34', open: 5.20, high: 5.30, low: 5.15, close: 5.25, volume: 50000 },
+      { date: '09:35', open: 5.25, high: 5.35, low: 5.20, close: 5.30, volume: 50000 },
+      { date: '09:36', open: 5.30, high: 5.40, low: 5.25, close: 5.35, volume: 50000 },
+      // Flagpole: 2 green candles
+      { date: '09:37', open: 5.35, high: 5.60, low: 5.30, close: 5.55, volume: 500000 },
+      { date: '09:38', open: 5.55, high: 5.80, low: 5.50, close: 5.75, volume: 600000 },
+      // Pullback: 1 red candle, 1 micro-green candle
+      { date: '09:39', open: 5.75, high: 5.76, low: 5.60, close: 5.65, volume: 80000 },
+      { date: '09:40', open: 5.65, high: 5.67, low: 5.60, close: 5.66, volume: 70000 }, // micro-green body 0.01 (1 cent)
+    ];
+
+    const resultRelaxed = detectBullFlag(candles, undefined, 5.0, 1, 1);
+    assert(resultRelaxed !== null, 'Accepts pullback with 1 micro-green candle under relaxed mode');
+
+    const resultStrict = detectBullFlag(candles, undefined, 5.0, 1, 0);
+    assert(resultStrict === null, 'Rejects pullback with 1 micro-green candle under strict mode');
   }
 
   // ----- Catalyst Validation Tests -----
@@ -363,6 +510,21 @@ async function runTests() {
     assert(validateStopDistance(5.00, 5.10) === false, 'Rejects stop above entry price');
   }
 
+  {
+    // Test 17.1: Zero-dollar stop distance ($0.00)
+    assert(validateStopDistance(5.00, 5.00) === false, 'Rejects zero stop distance');
+  }
+
+  {
+    // Test 17.2: Stop distance too narrow ($0.01)
+    assert(validateStopDistance(5.00, 4.99) === false, 'Rejects $0.01 stop distance (below minimum)');
+  }
+
+  {
+    // Test 17.3: Exactly $0.05 stop distance (boundary)
+    assert(validateStopDistance(5.00, 4.95) === true, 'Accepts $0.05 stop distance (boundary)');
+  }
+
   // ----- Target / R:R Calculation Tests -----
   console.log('\n--- Target & R:R Calculation ---');
 
@@ -399,6 +561,12 @@ async function runTests() {
     // Test 21: Invalid setup (stop above entry)
     const result = calculateTarget(5.00, 5.10);
     assert(result === null, 'Returns null for invalid stop (above entry)');
+  }
+
+  {
+    // Test 21.1: Invalid setup (stop distance too narrow $0.01)
+    const result = calculateTarget(5.00, 4.99);
+    assert(result === null, 'Returns null for stop distance below minimum');
   }
 
   // ----- Baseline Filter Tests -----

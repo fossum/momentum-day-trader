@@ -19,7 +19,7 @@ The code must filter incoming live top gainers from the FMP API and only pass a 
 ## 2. Catalyst Verification (The News Filter)
 Before entering Phase A (Technical Setup), the system must query the FMP news API to confirm a fundamental reason for the volume spike.
 *   **Timeframe:** The news must have dropped either in the current day's pre-market or during the current intraday session.
-*   **Valid Catalyst Keywords:** Scan the headline and summary for high-impact drivers: "FDA", "Earnings", "Clinical Trial", "Partnership", "Contract", "Acquisition", "Patent", "Merger", "Buyout", "SEC Filing", "Drug Approval", "Phase II", "Phase III", "Revenue", "Guidance".
+*   **Valid Catalyst Keywords:** Scan the headline and summary for high-impact drivers: "FDA", "Earnings", "Clinical Trial", "Partnership", "Contract", "Acquisition", "Patent", "Merger", "Buyout", "SEC Filing", "Drug Approval", "Phase II", "Phase III", "Revenue", "Guidance", "Agreement", "Cooperation", "Cooperate".
 *   **Action:** If no recent, high-impact news catalyst is found, flag the ticker as a "Technical Breakout Only" and abort the trade. The momentum strategy requires a fundamental driver.
 
 ## 3. Setup Detection: Bull Flag from 1-Minute Candles

@@ -47,7 +47,8 @@ export function Dashboard() {
     checkTradingWindow: true,
     checkBullFlagPattern: true,
     checkStopDistance: true,
-    checkRiskReward: true
+    checkRiskReward: true,
+    maxProximityPercent: 2.0
   });
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [retryTrigger, setRetryTrigger] = useState(0);

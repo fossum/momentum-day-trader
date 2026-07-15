@@ -25,7 +25,7 @@ function runCase0Checklist(
   const checkTradingWindow = preferences.checkTradingWindow ?? true;
 
   const catalystValidation = preferences.catalystValidation ?? 'gemini';
-  const checkNewsCatalyst = catalystValidation === 'keywords' || catalystValidation === 'gemini';
+  const checkNewsCatalyst = catalystValidation === 'keywords';
   const checkGeminiSentiment = catalystValidation === 'gemini';
 
   const passesPrice = !checkPriceRange || (liveData.price >= minPrice && liveData.price <= maxPrice);
@@ -43,7 +43,8 @@ function runCase0Checklist(
   // Mock Gemini Sentiment
   let geminiPass = true;
   if (checkGeminiSentiment) {
-    if (checkNewsCatalyst ? passesCatalyst : true) {
+    const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
+    if (hasActualNews) {
       geminiPass = liveData.catalyst.toLowerCase().includes("profit") || liveData.catalyst.toLowerCase().includes("positive");
     } else {
       geminiPass = false;
@@ -184,3 +185,26 @@ function createMockPrefs(prefs: Partial<UserPreferences>): UserPreferences {
     console.error("❌ Test 5: Catalyst bypassed validation works - FAILED", result);
   }
 }
+
+// 6. Test case: Catalyst Validation = gemini, headline has NO keywords but has positive sentiment
+{
+  const prefs = createMockPrefs({
+    minPrice: 2.0,
+    maxPrice: 20.0,
+    minGainPercent: 10,
+    minRvol: 5.0,
+    maxFloatMillions: 20,
+    catalystValidation: 'gemini'
+  });
+  const gainer: MarketGainer = { symbol: 'AAPL', name: 'Apple', price: 10.0, change: 1.5, changesPercentage: 15 };
+  // Headline contains NO keywords (e.g. FDA, etc) but positive sentiment
+  const liveData = { price: 10.0, rvol: 6.0, sharesOutstanding: 5000000, catalyst: "Company reports record-breaking quarterly positive results" };
+
+  const result = runCase0Checklist(liveData, gainer, prefs);
+  if (result.passesCatalyst && result.geminiPass && result.allPass) {
+    console.log("✅ Test 6: Gemini-only validation allows non-keyword positive news - PASSED");
+  } else {
+    console.error("❌ Test 6: Gemini-only validation allows non-keyword positive news - FAILED", result);
+  }
+}
+

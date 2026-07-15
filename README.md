@@ -26,3 +26,22 @@ View your app in AI Studio: https://ai.studio/apps/ebb825e0-d58e-4b6d-b706-1ca47
    ```bash
    npm run dev
    ```
+
+## Firestore Database Configuration
+
+This application caches Gemini News Sentiment Analysis globally in Firestore. Make sure to apply the security rules configured in `firestore.rules` to your Firebase project.
+
+Specifically, the rules allow authenticated users to read and write to the global `newsSentiment` collection:
+```javascript
+match /newsSentiment/{newsId} {
+  allow read: if request.auth != null;
+  allow create: if request.auth != null
+    && newsId is string && newsId.size() <= 128 && newsId.matches('^[a-zA-Z0-9_\\-]+$')
+    && request.resource.data.ticker is string
+    && request.resource.data.headline is string
+    && request.resource.data.isPositive is bool
+    && request.resource.data.reason is string
+    && (request.resource.data.timestamp == request.time || request.resource.data.timestamp == null);
+}
+```
+
