@@ -13,7 +13,7 @@ The code must filter incoming live top gainers from the FMP API and only pass a 
 *   **Price:** $2.00 <= Price <= $20.00
 *   **Float:** < 20,000,000 shares
 *   **Daily Gain:** >= 10%
-*   **Relative Volume (RVOL):** >= 5x the 14-day average for the current time of day.
+*   **Relative Volume (RVOL):** >= 5x the 14-day average. **CRITICAL FIX:** After 10:30 AM EST (the "lunchtime lull"), breakouts are notoriously weak. The minimum RVOL required to take a trade after 10:30 AM MUST be at least 20x.
 *   **Time Window:** Only process signals between 09:30 AM and 11:30 AM EST (default). An `extendedTradingHours` preference allows extending to 4:00 PM EST.
 
 ## 2. Catalyst Verification (The News Filter)

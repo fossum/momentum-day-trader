@@ -34,3 +34,27 @@ export function isWithinTradingWindowAt(date: Date, extendedHours: boolean = fal
     return true;
   }
 }
+
+/**
+ * Check if the current time is after 10:30 AM EST (the lunchtime lull starts).
+ */
+export function isAfterLunchtimeLull(): boolean {
+  return isAfterLunchtimeLullAt(new Date());
+}
+
+export function isAfterLunchtimeLullAt(date: Date): boolean {
+  try {
+    const etString = date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const etDate = new Date(etString);
+
+    const hour = etDate.getHours();
+    const minute = etDate.getMinutes();
+    const totalMinutes = hour * 60 + minute;
+
+    const lullStart = 10 * 60 + 30; // 10:30 AM
+
+    return totalMinutes >= lullStart;
+  } catch {
+    return false;
+  }
+}

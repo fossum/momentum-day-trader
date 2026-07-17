@@ -15,6 +15,7 @@ import {
   passesFloatFilter,
   passesTickerFilter,
   isWithinTradingWindow,
+  isAfterLunchtimeLull,
   formatCompact,
   analyzeBullFlag
 } from '../hooks/usePatternDetector';
@@ -393,8 +394,11 @@ export function ExecutionEngine({
               // Configuration limits
               const minPrice = preferencesRef.current.minPrice ?? 2.0;
               const maxPrice = preferencesRef.current.maxPrice ?? 20.0;
-              const minGainPercent = preferencesRef.current.minGainPercent ?? 10;
-              const minRvol = preferencesRef.current.minRvol ?? 5.0;
+              const minGainPercent = preferencesRef.current.minGainPercent ?? 10.0;
+              let minRvol = preferencesRef.current.minRvol ?? 5.0;
+              if (isAfterLunchtimeLull()) {
+                minRvol = Math.max(minRvol, 20.0);
+              }
               const maxFloatMillions = preferencesRef.current.maxFloatMillions ?? 20;
 
               const checkPriceRange = preferencesRef.current.checkPriceRange ?? true;
