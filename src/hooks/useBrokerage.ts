@@ -1,7 +1,22 @@
+/**
+ * @file useBrokerage.ts
+ * @description React hook to manage brokerage connections, retrieve balances,
+ * calculate PnL, and submit orders for Robinhood, Lightspeed, and IBKR.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import { UserPreferences } from '../types';
 import { auth, DEFAULT_USER_ID } from '../lib/firebase';
 
+/**
+ * Custom React hook to manage brokerage connections, retrieve balances,
+ * calculate PnL, and submit trade orders.
+ *
+ * @param preferences - The user preferences containing brokerage credentials and choices.
+ * @param retryTrigger - Numeric trigger incremented to force connection retries.
+ * @param addLogMessage - Optional callback to append messages to the application terminal logs.
+ * @returns An object containing balance state, PnL, connection status, and order dispatch methods.
+ */
 export function useBrokerage(
   preferences: UserPreferences,
   retryTrigger: number = 0,
@@ -146,7 +161,13 @@ export function useBrokerage(
     return () => {
       clearInterval(interval);
     };
-  }, [preferences, retryTrigger]);
+  }, [
+    preferences.brokerage,
+    preferences.robinhoodToken,
+    preferences.lightspeedKey,
+    preferences.ibkrUrl,
+    retryTrigger
+  ]);
 
   const executeTrade = async (
     ticker: string, 

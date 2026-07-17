@@ -146,6 +146,16 @@ export function ExecutionEngine({
 
   const balanceRef = useRef<number>(balance);
 
+  const onSavePreferencesRef = useRef(onSavePreferences);
+  useEffect(() => {
+    onSavePreferencesRef.current = onSavePreferences;
+  }, [onSavePreferences]);
+
+  const executeTradeRef = useRef(executeTrade);
+  useEffect(() => {
+    executeTradeRef.current = executeTrade;
+  }, [executeTrade]);
+
   useEffect(() => {
     preferencesRef.current = preferences;
   }, [preferences]);
@@ -195,7 +205,21 @@ export function ExecutionEngine({
    * @param trade - The active simulated trade state to save, or null to clear it.
    * @returns A promise that resolves when the trade state is successfully persisted.
    */
-  const updateCurrentTrade = async (trade: SimulatedTrade | null): Promise<void> => {
+  const updateCurrentTrade = useCallback(async (trade: SimulatedTrade | null): Promise<void> => {
+    // Prevent infinite state update loop: exit early if new trade state matches the current one
+    if (trade === null && currentTradeRef.current === null) {
+      return;
+    }
+    if (trade && currentTradeRef.current &&
+        trade.ticker === currentTradeRef.current.ticker &&
+        trade.entryPrice === currentTradeRef.current.entryPrice &&
+        trade.exitPrice === currentTradeRef.current.exitPrice &&
+        trade.shares === currentTradeRef.current.shares &&
+        trade.setup === currentTradeRef.current.setup &&
+        trade.pnl === currentTradeRef.current.pnl) {
+      return;
+    }
+
     currentTradeRef.current = trade;
     setCurrentTrade(trade);
     if (auth.currentUser) {
@@ -204,12 +228,12 @@ export function ExecutionEngine({
           ...preferencesRef.current,
           currentTrade: trade ? trade : ({ empty: true } as any)
         };
-        await onSavePreferences(updatedPrefs);
+        await onSavePreferencesRef.current(updatedPrefs);
       } catch (e) {
         console.warn('Failed to save active trade to preferences', e);
       }
     }
-  };
+  }, []);
 
   const logTradeToDb = async (resolvedTrade: SimulatedTrade) => {
     try {
@@ -947,7 +971,7 @@ export function ExecutionEngine({
                   changeStep(4);
                 } else {
                   try {
-                    const res = await executeTrade(
+                    const res = await executeTradeRef.current(
                       activeTrade.ticker,
                       activeTrade.shares,
                       activeTrade.entryPrice,
@@ -1112,7 +1136,7 @@ export function ExecutionEngine({
                   changeStep(6);
                 } else {
                   try {
-                    const res = await executeTrade(resolvedTrade.ticker, resolvedTrade.shares, resolvedTrade.exitPrice, 'sell');
+                    const res = await executeTradeRef.current(resolvedTrade.ticker, resolvedTrade.shares, resolvedTrade.exitPrice, 'sell');
                     if (res && res.requiresConfirmation) {
                       addLog(`[BROKER WARNING] Order requires confirmation: ${JSON.stringify(res.prompts[0].message)}`, 'warn', resolvedTrade.ticker);
                       isPausedRef.current = true;
@@ -1148,7 +1172,7 @@ export function ExecutionEngine({
 
     const timer = setInterval(runSimulationStep, speed);
     return () => clearInterval(timer);
-  }, [isActive, speed, addLog, executeTrade, setBalance, onSavePreferences]);
+  }, [isActive, speed, addLog, setBalance]);
 
   useEffect(() => {
     if (isConnecting) {
