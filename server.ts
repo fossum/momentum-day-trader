@@ -5,7 +5,7 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import fs from "fs";
 import { analyzeNewsSentiment } from "./src/lib/gemini";
-import { FmpApiClient, decompose5MinTo1Min, generateMock1MinCandles } from "./fmp_client";
+import { FmpApiClient } from "./fmp_client";
 
 dotenv.config();
 
@@ -412,96 +412,66 @@ async function startServer() {
   });
 
   app.get("/api/stock/:ticker/chart/1min", async (req, res) => {
-    const key = getFmpKey();
-    const ticker = req.params.ticker.toUpperCase();
-    let data: any[] = [];
-    let isFallback = false;
+    try {
+      const key = getFmpKey();
+      const ticker = req.params.ticker.toUpperCase();
 
-    // 1. Try fetching real 1-minute candles (only if 1min API is supported)
-    if (fmpClient.is1MinUnsupported) {
-      isFallback = true;
-    } else {
-      try {
-        data = await fmpClient.fetchWithCache<any[]>(
-          `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`,
-          60000, // 1 minute cache
-          { is1Min: true }
-        );
-      } catch (err: any) {
-        console.warn(`[FMP 1MIN CHART ERROR] Failed for ${ticker}: ${err.message}. Attempting 5-min fallback...`);
-        isFallback = true;
+      if (fmpClient.is1MinUnsupported) {
+        return res.status(403).json({ error: "FMP Subscription does not support 1-minute historical charts." });
       }
-    }
 
-    // 2. Fallback to 5-min chart decomposition if 1-min chart failed or returned empty
-    if (isFallback || !Array.isArray(data) || data.length === 0) {
-      try {
-        const fiveMinData = await fmpClient.fetchWithCache<any[]>(
-          `https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`,
-          60000 // 1 minute cache
-        );
-        if (Array.isArray(fiveMinData) && fiveMinData.length > 0) {
-          data = decompose5MinTo1Min(fiveMinData);
-          isFallback = true;
-          console.log(`[FMP 1MIN FALLBACK] Successfully decomposed 5-min chart into 1-min candles for ${ticker}`);
-        }
-      } catch (fallbackErr: any) {
-        console.warn(`[FMP 5MIN CHART ERROR] Fallback failed for ${ticker}: ${fallbackErr.message}. Generating mock candles...`);
+      const data = await fmpClient.fetchWithCache<any[]>(
+        `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`,
+        60000, // 1 minute cache
+        { is1Min: true }
+      );
+
+      if (!Array.isArray(data) || data.length === 0) {
+        return res.status(404).json({ error: `No 1-minute chart data found for ${ticker}.` });
       }
-    }
 
-    // 3. Fallback to mock candle generation if both fetches failed
-    if (!Array.isArray(data) || data.length === 0) {
-      const currentPrice = await fetchCurrentPrice(ticker, key);
-      data = generateMock1MinCandles(ticker, currentPrice);
-      isFallback = true;
-      console.log(`[FMP 1MIN FALLBACK] Generated ${data.length} mock 1-min candles for ${ticker} at price $${currentPrice}`);
-    }
-
-    // 4. Double check EMA calculations against FMP's pre-calculated indicator (only if we did NOT fall back, to save API calls)
-    if (!isFallback) {
+      // Double check EMA calculations against FMP's pre-calculated indicator
       try {
-        if (Array.isArray(data) && data.length > 0) {
-          const chronological = [...data].reverse();
-          const localEmaValues = computeLocalEma(chronological, 9);
+        const chronological = [...data].reverse();
+        const localEmaValues = computeLocalEma(chronological, 9);
 
-          const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
-          const fmpEmaData = await fmpClient.fetchWithCache<any[]>(emaApiUrl, 0);
-          if (Array.isArray(fmpEmaData)) {
-              const fmpEmaMap = new Map<string, number>();
-              fmpEmaData.forEach((item: any) => {
-                if (item.date && item.ema !== undefined && item.ema !== null) {
-                  fmpEmaMap.set(item.date, parseFloat(item.ema));
-                }
-              });
-
-              let totalChecks = 0;
-              let discrepanciesCount = 0;
-              chronological.forEach((candle: any, idx: number) => {
-                const localEmaVal = localEmaValues[idx];
-                const fmpEmaVal = fmpEmaMap.get(candle.date);
-                if (fmpEmaVal !== undefined && !isNaN(localEmaVal)) {
-                  totalChecks++;
-                  const diff = Math.abs(localEmaVal - fmpEmaVal);
-                  if (diff > 0.05) {
-                    discrepanciesCount++;
-                    console.warn(`[EMA CHECK WARNING] Discrepancy for ${ticker} at ${candle.date}: Computed = ${localEmaVal.toFixed(4)}, FMP = ${fmpEmaVal.toFixed(4)} (diff: ${diff.toFixed(4)})`);
-                  }
-                }
-              });
-              if (discrepanciesCount > 0) {
-                console.warn(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. Found ${discrepanciesCount} discrepancies exceeding 0.05 threshold.`);
-              } else {
-                console.log(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. No discrepancies found.`);
+        const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
+        const fmpEmaData = await fmpClient.fetchWithCache<any[]>(emaApiUrl, 0);
+        if (Array.isArray(fmpEmaData)) {
+            const fmpEmaMap = new Map<string, number>();
+            fmpEmaData.forEach((item: any) => {
+              if (item.date && item.ema !== undefined && item.ema !== null) {
+                fmpEmaMap.set(item.date, parseFloat(item.ema));
               }
-            }
-          }
-      } catch (emaCheckError: any) {
-        console.warn(`EMA check verification failed for ${ticker}:`, emaCheckError.message);
-      }
-    }
+            });
 
-    res.json(data);
+            let totalChecks = 0;
+            let discrepanciesCount = 0;
+            chronological.forEach((candle: any, idx: number) => {
+              const localVal = localEmaValues[idx];
+              if (localVal === null) return;
+              const fmpVal = fmpEmaMap.get(candle.date);
+              if (fmpVal !== undefined && !isNaN(localVal)) {
+                totalChecks++;
+                const diff = Math.abs(localVal - fmpVal);
+                if (diff > 0.05) {
+                  discrepanciesCount++;
+                }
+              }
+            });
+            if (discrepanciesCount > 0) {
+              console.warn(`[EMA VALIDATION] Found ${discrepanciesCount} significant discrepancies against FMP EMA data out of ${totalChecks} checks for ${ticker}.`);
+            }
+        }
+      } catch (emaErr: any) {
+        console.warn(`[EMA VALIDATION ERROR] Could not validate EMA for ${ticker}: ${emaErr.message}`);
+      }
+
+      res.json(data);
+    } catch (err: any) {
+      console.error(`[FMP 1MIN CHART ERROR] Failed for ${req.params.ticker}: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/stock/:ticker/news", async (req, res) => {

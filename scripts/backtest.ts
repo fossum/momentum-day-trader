@@ -1,11 +1,9 @@
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
-import { db } from '../src/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { adminDb } from '../src/lib/firebaseAdmin';
 import {
-  FmpApiClient,
-  decompose5MinTo1Min
+  FmpApiClient
 } from '../fmp_client';
 import { analyzeNewsSentiment } from '../src/lib/gemini';
 import {
@@ -45,7 +43,9 @@ const getEasternISOString = (date: Date = new Date()): string => {
 
 async function main() {
   const args = process.argv.slice(2);
-  const userId = args[0] || 'testuser';
+  const isVerbose = args.includes('--verbose');
+  const userIdArg = args.find(a => !a.startsWith('--'));
+  const userId = userIdArg || 'testuser';
 
   const logsDir = path.join(process.cwd(), 'logs');
   if (!fs.existsSync(logsDir)) {
@@ -68,8 +68,8 @@ async function main() {
   log(`Fetching preferences from Firebase for ${userId}...`);
   let preferences: UserPreferences;
   try {
-    const prefsSnap = await getDoc(doc(db, 'users', userId, 'preferences', 'settings'));
-    if (prefsSnap.exists()) {
+    const prefsSnap = await adminDb.collection('users').doc(userId).collection('preferences').doc('settings').get();
+    if (prefsSnap.exists) {
       preferences = prefsSnap.data() as UserPreferences;
       log(`Successfully loaded preferences from Firebase.`);
     } else {
@@ -179,33 +179,17 @@ async function main() {
 
     log(`[TESTING] $${gainer.symbol} (+${gainer.changesPercentage.toFixed(1)}%) - Fetching 1min chart...`);
     let chart: any[] = [];
-    let isFallback = false;
 
     if (fmpClient.is1MinUnsupported) {
-      isFallback = true;
-    } else {
-      try {
-        chart = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 0, { is1Min: true });
-      } catch (err: any) {
-        log(`Failed to fetch 1min chart for ${gainer.symbol}: ${err.message}. Attempting 5-min fallback...`);
-        isFallback = true;
-      }
+      log(`[ERROR] FMP Subscription does not support 1-minute historical charts for ${gainer.symbol}. Skipping.`);
+      continue;
     }
 
-    if (isFallback || !Array.isArray(chart) || chart.length === 0) {
-      try {
-        const fiveMinData = await fmpClient.fetchWithCache<any[]>(
-          `https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${gainer.symbol}&apikey=${fmpApiKey}`,
-          0
-        );
-        if (Array.isArray(fiveMinData) && fiveMinData.length > 0) {
-          chart = decompose5MinTo1Min(fiveMinData);
-          log(`[FMP 1MIN FALLBACK] Successfully decomposed 5-min chart into 1-min candles for ${gainer.symbol}`);
-        }
-      } catch (fallbackErr: any) {
-        log(`[FMP 5MIN CHART ERROR] Fallback failed for ${gainer.symbol}: ${fallbackErr.message}. Skipping.`);
-        continue;
-      }
+    try {
+      chart = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 0, { is1Min: true });
+    } catch (err: any) {
+      log(`[ERROR] Failed to fetch 1min chart for ${gainer.symbol}: ${err.message}. Check FMP permissions.`);
+      continue;
     }
 
     if (!Array.isArray(chart) || chart.length === 0) {
@@ -295,11 +279,13 @@ async function main() {
       const currentRvol = parseFloat((totalVolSoFar / (avgVolume / 390 * chartUpToNow.length)).toFixed(2)); // approximate intraday rvol
 
       if (preferences.checkRelativeVol && !passesRvolFilter(currentRvol, minRvol)) {
+        if (isVerbose) log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: RVol ${currentRvol} < ${minRvol}`);
         continue;
       }
 
       const hasKnownFloat = floatShares !== 0;
       if (preferences.checkSharesFloat && (!hasKnownFloat || !passesFloatFilter(floatShares, maxFloatMillions))) {
+        if (isVerbose && i === 0) log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: Float ${(floatShares/1000000).toFixed(2)}M > ${maxFloatMillions}M`);
         continue;
       }
 
@@ -311,6 +297,10 @@ async function main() {
           preferences.maxFlagpoleRedCandles ?? 1,
           preferences.maxPullbackGreenCandles ?? 1
         );
+
+        if (isVerbose && !patternResult.detected) {
+          log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: ${JSON.stringify(patternResult)}`);
+        }
 
         if (patternResult.detected) {
           // Sentiment Check
