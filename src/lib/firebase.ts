@@ -26,7 +26,8 @@ export const auth = getAuth(app);
 
 // Use the specific databaseId for AI Studio, loaded from environment variables if available.
 const databaseId = (typeof process !== 'undefined' && process.env?.FIREBASE_DATABASE_ID) ||
-  (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID ||
+  // @ts-ignore
+  import.meta.env.VITE_FIREBASE_DATABASE_ID ||
   "missing-db-id";
 
 /**
