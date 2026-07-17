@@ -1154,18 +1154,18 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 description = `[STOP LOSS] Stop loss hit! $${activeTrade.ticker} dropped below risk limit. Sold at: $${exitPrice} (Bid). P&L: ${finalPnlPercent.toFixed(2)}%`;
                 logType = 'fail';
                 shouldResolve = true;
-              } else if (positionStepRef.current <= 2 && currentPrice <= entryLivePriceRef.current) {
-                // BAILOUT — breakout failed (price flat or declining in first 1–2 cycles)
+              } else if (positionStepRef.current >= Math.ceil(120000 / speed) && currentPrice <= entryLivePriceRef.current) {
+                // BAILOUT — breakout failed (price flat or declining after 2 minutes)
                 exitPrice = currentPrice;
                 const finalPnlPercent = ((exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
-                description = `[BAILOUT] Breakout failed to surge for $${activeTrade.ticker}. Price flat/declining after entry. Sold at market: $${exitPrice.toFixed(2)}. P&L: ${finalPnlPercent >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
+                description = `[BAILOUT] Breakout failed to surge for $${activeTrade.ticker}. Price flat/declining after 2 minutes. Sold at market: $${exitPrice.toFixed(2)}. P&L: ${finalPnlPercent >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
                 logType = 'warn';
                 shouldResolve = true;
-              } else if (positionStepRef.current >= 5) {
-                // TIME LIMIT — scratch
+              } else if (positionStepRef.current >= Math.ceil(300000 / speed)) {
+                // TIME LIMIT — scratch (after 5 minutes)
                 exitPrice = currentPrice;
                 const finalPnlPercent = ((exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice) * 100;
-                description = `[SCRATCH] Setup stalled (holding time limit reached). Sold at market price: $${exitPrice}. P&L: ${finalPnlPercent >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
+                description = `[SCRATCH] Setup stalled (5-minute holding time limit reached). Sold at market price: $${exitPrice.toFixed(2)}. P&L: ${finalPnlPercent >= 0 ? '+' : ''}${finalPnlPercent.toFixed(2)}%`;
                 logType = 'warn';
                 shouldResolve = true;
               }

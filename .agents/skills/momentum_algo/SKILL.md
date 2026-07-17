@@ -47,8 +47,9 @@ The system should prepare to trigger a market order when the News Catalyst is va
 *   **Reward:Risk Ratio:** Minimum 2:1. If the distance from entry to the target does not provide at least 2x the stop distance, do not take the trade.
 *   **Target Price:** Derived from the 2:1 minimum R:R ratio (entry + 2 × stop distance), or the next resistance level if it provides >= 2:1.
 
-## 6. Failed Breakout Bailout
-*   If the price does not surge within the first 1–2 polling cycles after entry (price is flat or declining), trigger an immediate exit at market price.
+## 6. Failed Breakout Bailout & Scratch Limits
+*   **Bailout:** If the price does not surge within the first 2 minutes after entry (price is flat or declining below entry), trigger an immediate bailout exit at market price.
+*   **Scratch:** If the setup stalls and fails to hit the target or stop loss within 5 minutes of entry, exit the trade at market price to free up capital.
 *   Do not hold a failed breakout hoping it will recover.
 
 ## 7. Architecture
