@@ -44,6 +44,7 @@ The system should prepare to trigger a market order when the News Catalyst is va
 ## 5. Risk Management
 *   **Stop Loss:** Set at the lowest price of the Phase B pullback candles.
 *   **Maximum Stop Distance:** $0.20 per share. If the pullback depth exceeds $0.20, do not take the trade.
+*   **Ultra-Micro Floats:** For stocks with a float under 1,000,000 shares (e.g., ending in 'K' or < 1M), increase the minimum stop distance to $0.08 and reduce the calculated position size by 50% to manage higher volatility risk.
 *   **Reward:Risk Ratio:** Minimum 2:1. If the distance from entry to the target does not provide at least 2x the stop distance, do not take the trade.
 *   **Target Price:** Derived from the 2:1 minimum R:R ratio (entry + 2 × stop distance), or the next resistance level if it provides >= 2:1.
 

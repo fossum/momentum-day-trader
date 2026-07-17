@@ -908,6 +908,27 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
               // Run bull flag detection
               let patternResult: any = null;
+
+              // --- ULTRA-MICRO FLOAT CHECK ---
+              let isUltraMicroFloat = false;
+              if (activeTrade.float && typeof activeTrade.float === 'string') {
+                const f = activeTrade.float.toUpperCase();
+                if (f.endsWith('K')) {
+                  isUltraMicroFloat = true;
+                } else if (f.endsWith('M')) {
+                   const num = parseFloat(f);
+                   if (!isNaN(num) && num < 1.0) {
+                     isUltraMicroFloat = true;
+                   }
+                } else if (!f.endsWith('K') && !f.endsWith('M') && !f.endsWith('B') && f !== 'UNKNOWN') {
+                   const num = parseFloat(f.replace(/,/g, ''));
+                   if (!isNaN(num) && num < 1000000) {
+                     isUltraMicroFloat = true;
+                   }
+                }
+              }
+              // -------------------------------
+
               if (checkBullFlagPattern) {
                 if (!Array.isArray(candles) || candles.length < 5) {
                   addLog(`[PATTERN] Insufficient candle data for $${activeTrade.ticker} (${candles?.length || 0} candles). Skipping.`, 'warn', activeTrade.ticker);
@@ -934,7 +955,13 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
                 const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
                 const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
-                const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
+                let minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
+                
+                if (isUltraMicroFloat && minStopDistance < 0.08) {
+                  minStopDistance = 0.08;
+                  addLog(`[RISK] Ultra-micro float detected (${activeTrade.float}). Increased minimum stop distance for pattern detection to $${minStopDistance.toFixed(2)}.`, 'info', activeTrade.ticker);
+                }
+
                 patternResult = detectBullFlag(
                   sorted,
                   livePrice,
@@ -956,7 +983,10 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
 
               // Configuration limits
               const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
-              const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
+              let minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
+              if (isUltraMicroFloat && minStopDistance < 0.08) {
+                minStopDistance = 0.08;
+              }
               const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
 
               // Entry & Stop calculations
@@ -1004,6 +1034,14 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 computedShares = Math.max(1, Math.floor(maxCashForTrade / entryPrice));
               } else {
                 computedShares = parseInt(psStr) || 1;
+              }
+
+              if (isUltraMicroFloat) {
+                const originalShares = computedShares;
+                computedShares = Math.max(1, Math.floor(computedShares * 0.5));
+                if (originalShares !== computedShares) {
+                  addLog(`[RISK] Ultra-micro float detected (${activeTrade.float}). Reduced position size from ${originalShares} to ${computedShares} shares.`, 'warn', activeTrade.ticker);
+                }
               }
 
               const setupTrade: SimulatedTrade = {
