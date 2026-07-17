@@ -83,3 +83,27 @@ export function isAfterLunchtimeLullAt(date: Date): boolean {
   }
 }
 
+/**
+ * Calculates the number of elapsed market minutes since 9:30 AM EST.
+ * Caps the result between 1 and 390 minutes (6.5 hours of regular trading).
+ * 
+ * @param date - The Date object representing the time to check.
+ * @returns The number of elapsed market minutes since 9:30 AM EST.
+ */
+export function getElapsedMarketMinutes(date: Date): number {
+  try {
+    const etString = date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const etDate = new Date(etString);
+
+    const hour = etDate.getHours();
+    const minute = etDate.getMinutes();
+    const totalMinutes = hour * 60 + minute;
+
+    // Calculate elapsed minutes, guaranteeing at least 1 and at most 390.
+    return Math.min(390, Math.max(1, totalMinutes - MARKET_OPEN_MINUTES + 1));
+  } catch {
+    return 1;
+  }
+}
+
+

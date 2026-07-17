@@ -8,7 +8,6 @@ import { initializeApp, cert, applicationDefault, getApps } from 'firebase-admin
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
-import path from 'path';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -45,7 +44,9 @@ if (!getApps().length) {
 /**
  * The initialized Firestore Admin database instance, configured with the database ID from the environment.
  */
-export const adminDb = getFirestore(process.env.FIREBASE_DATABASE_ID || 'missing-db-id');
+export const adminDb = process.env.FIREBASE_DATABASE_ID
+  ? getFirestore(process.env.FIREBASE_DATABASE_ID)
+  : getFirestore();
 
 /**
  * The initialized Firebase Admin Auth instance.

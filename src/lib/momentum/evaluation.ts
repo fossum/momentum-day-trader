@@ -8,7 +8,7 @@
 import { Candle, SetupEvaluationResult } from './types';
 import { passesFloatFilter, passesRvolFilter } from './filters';
 import { validateStopDistance, calculateTarget } from './risk';
-import { isWithinTradingWindowAt, isAfterLunchtimeLullAt } from './tradingWindow';
+import { isWithinTradingWindowAt, isAfterLunchtimeLullAt, getElapsedMarketMinutes } from './tradingWindow';
 import { analyzeBullFlag } from './bullFlag';
 import { validateCatalyst } from './catalysts';
 import { UserPreferences } from '../../types';
@@ -88,7 +88,10 @@ export async function evaluateSetup(params: {
   if (isAfterLunchtimeLullAt(time)) {
     minRvol = Math.max(minRvol, 20.0);
   }
-  const calculatedRvol = parseFloat((volume / avgVolume).toFixed(2));
+  // Time-scaled relative volume calculation (volume / (avgVolume / 390 * elapsedMarketMinutes))
+  const elapsedMinutes = getElapsedMarketMinutes(time);
+  const scaledAvgVolume = (avgVolume / 390) * elapsedMinutes;
+  const calculatedRvol = scaledAvgVolume > 0 ? parseFloat((volume / scaledAvgVolume).toFixed(2)) : 0.0;
   const passesRvol = !checkRelativeVol || passesRvolFilter(calculatedRvol, minRvol);
 
   // 4. Shares Float Check

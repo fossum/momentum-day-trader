@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Momentum trading strategy backtest runner.
+ * Simulates chronological market candle data, evaluates gapper setups,
+ * tracks simulated positions, and logs strategy metrics with Gemini news sentiment analysis caching.
+ */
+
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +17,7 @@ import {
   formatChecklistReport
 } from '../src/lib/momentum';
 import { UserPreferences, MarketGainer, SimulatedTrade } from '../src/types';
+import { computeHash, computeFnv1aHash } from '../src/lib/firebase';
 
 /**
  * Helper to parse FMP date strings in Eastern Time.
@@ -28,6 +35,12 @@ function parseFmpDate(dateStr: string): Date {
 
 dotenv.config();
 
+/**
+ * Formats a Date object to an Eastern Time ISO-like string.
+ *
+ * @param date - The Date object to format. Defaults to current date.
+ * @returns The formatted date string in Eastern Time.
+ */
 const getEasternISOString = (date: Date = new Date()): string => {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
@@ -51,11 +64,19 @@ const getEasternISOString = (date: Date = new Date()): string => {
 
 
 
+/**
+ * Main execution function for the backtester. Loads user preferences,
+ * fetches biggest market gainers, simulates chronological candle data progression,
+ * runs the execution strategy, and logs backtest performance metrics.
+ * 
+ * @returns A promise that resolves when the backtester execution completes.
+ */
 async function main() {
   const args = process.argv.slice(2);
   const isVerbose = args.includes('--verbose');
   const userIdArg = args.find(a => !a.startsWith('--'));
   const userId = userIdArg || 'testuser';
+  let currentSimulatedTime: Date | null = null;
 
   const logsDir = path.join(process.cwd(), 'logs');
   if (!fs.existsSync(logsDir)) {
@@ -66,8 +87,15 @@ async function main() {
   const logFilePath = path.join(logsDir, `backtest_${userId}_${todayStr}.log`);
   fs.writeFileSync(logFilePath, ''); // Overwrite log file on startup
 
+  /**
+   * Helper function to log messages to both the console and the user-specific 
+   * backtest log file, utilizing the simulated stock market time as the timestamp 
+   * prefix when processing candles.
+   * 
+   * @param message - The message string to log.
+   */
   const log = (message: string) => {
-    const timestamp = getEasternISOString();
+    const timestamp = currentSimulatedTime ? getEasternISOString(currentSimulatedTime) : getEasternISOString();
     const formatted = `[${timestamp}] ${message}`;
     console.log(formatted);
     fs.appendFileSync(logFilePath, formatted + '\n');
@@ -137,7 +165,11 @@ async function main() {
   }
 
   const allCompletedTrades: SimulatedTrade[] = [];
-  let balance = 100;
+  const startingBalance = 100;
+  let balance = startingBalance;
+
+  // Local in-memory cache to prevent redundant Firestore queries or Gemini API calls within the same run.
+  const sentimentCache = new Map<string, { isPositive: boolean; reason: string }>();
 
   const fmpApiKey = process.env.FMP_API_KEY;
   if (!fmpApiKey) {
@@ -166,8 +198,6 @@ async function main() {
   const minPrice = preferences.minPrice ?? 2.0;
   const maxPrice = preferences.maxPrice ?? 20.0;
   const minGainPercent = preferences.minGainPercent ?? 10;
-  const minRvol = preferences.minRvol ?? 5.0;
-  const maxFloatMillions = preferences.maxFloatMillions ?? 20;
 
   const blacklist = preferences.blacklistedTickers || [];
 
@@ -234,28 +264,35 @@ async function main() {
     let avgVolume = 1;
     let dailyVolume = 0;
     let catalystText = "No recent fundamental catalyst found on FMP.";
-    try {
-      const [floatRes, profileRes, newsRes, quoteRes] = await Promise.allSettled([
-        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
-        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
-        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${gainer.symbol}&limit=5&apikey=${fmpApiKey}`, 300000),
-        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000)
-      ]);
+    const [floatRes, profileRes, newsRes, quoteRes] = await Promise.allSettled([
+      fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
+      fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
+      fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${gainer.symbol}&limit=5&apikey=${fmpApiKey}`, 300000),
+      fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000)
+    ]);
 
-      if (floatRes.status === 'fulfilled' && Array.isArray(floatRes.value) && floatRes.value.length > 0) {
-        floatShares = floatRes.value[0].floatShares || floatRes.value[0].outstandingShares || 0;
-      }
-      if (profileRes.status === 'fulfilled' && Array.isArray(profileRes.value) && profileRes.value.length > 0) {
-        avgVolume = profileRes.value[0].averageVolume || 1;
-      }
-      if (newsRes.status === 'fulfilled' && Array.isArray(newsRes.value) && newsRes.value.length > 0 && newsRes.value[0].title) {
-        catalystText = `News: ${newsRes.value[0].title}`;
-      }
-      if (quoteRes.status === 'fulfilled' && Array.isArray(quoteRes.value) && quoteRes.value.length > 0) {
-        dailyVolume = quoteRes.value[0].volume || 0;
-      }
-    } catch (e: any) {
-      log(`[WARN] FMP Profile/Quote fetch failed for ${gainer.symbol}: ${e.message}`);
+    if (floatRes.status === 'fulfilled' && Array.isArray(floatRes.value) && floatRes.value.length > 0) {
+      floatShares = floatRes.value[0].floatShares || floatRes.value[0].outstandingShares || 0;
+    } else if (floatRes.status === 'rejected') {
+      log(`[WARN] FMP Float fetch failed for ${gainer.symbol}: ${floatRes.reason}`);
+    }
+
+    if (profileRes.status === 'fulfilled' && Array.isArray(profileRes.value) && profileRes.value.length > 0) {
+      avgVolume = profileRes.value[0].averageVolume || 1;
+    } else if (profileRes.status === 'rejected') {
+      log(`[WARN] FMP Profile fetch failed for ${gainer.symbol}: ${profileRes.reason}`);
+    }
+
+    if (newsRes.status === 'fulfilled' && Array.isArray(newsRes.value) && newsRes.value.length > 0 && newsRes.value[0].title) {
+      catalystText = `News: ${newsRes.value[0].title}`;
+    } else if (newsRes.status === 'rejected') {
+      log(`[WARN] FMP News fetch failed for ${gainer.symbol}: ${newsRes.reason}`);
+    }
+
+    if (quoteRes.status === 'fulfilled' && Array.isArray(quoteRes.value) && quoteRes.value.length > 0) {
+      dailyVolume = quoteRes.value[0].volume || 0;
+    } else if (quoteRes.status === 'rejected') {
+      log(`[WARN] FMP Quote fetch failed for ${gainer.symbol}: ${quoteRes.reason}`);
     }
 
     const totalRegularVol = todayCandles.reduce((sum, c) => sum + (c.volume || 0), 0);
@@ -275,6 +312,7 @@ async function main() {
     for (let i = 0; i < todayCandles.length; i++) {
       const currentCandle = todayCandles[i];
       const candleTime = parseFmpDate(currentCandle.date);
+      currentSimulatedTime = candleTime;
       const timeStr = currentCandle.date.split(' ')[1];
       const livePrice = currentCandle.close;
 
@@ -336,15 +374,74 @@ async function main() {
       const regularVolSoFar = chartUpToNow.reduce((sum, c) => sum + (c.volume || 0), 0);
       const totalVolSoFar = preMarketVol + regularVolSoFar;
 
+      /**
+       * Sentiment check callback that validates a fundamental catalyst news story
+       * using a dual-layer cache (local in-memory + global Firestore newsSentiment cache)
+       * before executing a live Gemini API request.
+       * 
+       * @param ticker - The stock ticker symbol.
+       * @param catalystText - The headline or news text to analyze.
+       * @returns A promise resolving to the news sentiment result.
+       */
       const checkSentimentCallback = async (ticker: string, catalystText: string) => {
         const hasActualNews = catalystText && !catalystText.startsWith("No recent");
-        if (hasActualNews) {
-          const sentimentRes = await analyzeNewsSentiment(ticker, catalystText);
-          return { isPositive: sentimentRes.isPositive, reason: sentimentRes.reason };
-        } else {
+        if (!hasActualNews) {
           return { isPositive: false, reason: "No actual news" };
         }
+
+        // 1. Check local in-memory cache first
+        const cacheKey = `${ticker}:${catalystText}`;
+        if (sentimentCache.has(cacheKey)) {
+          return sentimentCache.get(cacheKey)!;
+        }
+
+        // 2. Compute hashes and check persistent Firestore cache
+        const shaHash = await computeHash(catalystText);
+        const fnvHash = computeFnv1aHash(catalystText);
+
+        try {
+          // Attempt SHA-256 lookup first
+          let cachedDoc = await adminDb.collection('newsSentiment').doc(shaHash).get();
+          if (!cachedDoc.exists) {
+            // Fall back to FNV-1a lookup
+            cachedDoc = await adminDb.collection('newsSentiment').doc(fnvHash).get();
+          }
+
+          if (cachedDoc.exists) {
+            const data = cachedDoc.data();
+            if (data && typeof data.isPositive === 'boolean') {
+              const res = { isPositive: data.isPositive, reason: data.reason || 'Cached.' };
+              sentimentCache.set(cacheKey, res);
+              return res;
+            }
+          }
+        } catch (err: any) {
+          log(`[WARNING] Failed to query Firestore sentiment cache: ${err.message}`);
+        }
+
+        // 3. Cache miss: perform live Gemini API call
+        const sentimentRes = await analyzeNewsSentiment(ticker, catalystText);
+        const result = { isPositive: sentimentRes.isPositive, reason: sentimentRes.reason };
+
+        // Save to local in-memory cache
+        sentimentCache.set(cacheKey, result);
+
+        // Save to persistent Firestore cache under SHA-256 hash (the preferred format)
+        try {
+          await adminDb.collection('newsSentiment').doc(shaHash).set({
+            ticker,
+            headline: catalystText,
+            isPositive: result.isPositive,
+            reason: result.reason,
+            timestamp: new Date()
+          });
+        } catch (err: any) {
+          log(`[WARNING] Failed to write to Firestore sentiment cache: ${err.message}`);
+        }
+
+        return result;
       };
+
 
       const evalResult = await evaluateSetup({
         ticker: gainer.symbol,
@@ -400,6 +497,9 @@ async function main() {
 
     if (activeTrade) {
       const lastCandle = todayCandles[todayCandles.length - 1];
+      if (lastCandle) {
+        currentSimulatedTime = parseFmpDate(lastCandle.date);
+      }
       const endTimeStr = lastCandle ? lastCandle.date.split(' ')[1] : '11:30:00';
       const exitPrice = lastCandle ? lastCandle.close : activeTrade.entry;
       const pnl = (exitPrice - activeTrade.entry) * activeTrade.shares;
@@ -420,12 +520,13 @@ async function main() {
       });
       activeTrade = null;
     }
+    currentSimulatedTime = null;
   }
 
   log("\n======================================================================");
   log("                      BACKTEST PERFORMANCE SUMMARY                    ");
   log("======================================================================");
-  log(`Starting Balance:  $${(100000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  log(`Starting Balance:  $${(startingBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
   log(`Ending Balance:    $${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
   const totalTrades = allCompletedTrades.length;
@@ -442,6 +543,7 @@ async function main() {
   log(`Winning Trades:    ${winningTrades.length}`);
   log(`Losing Trades:     ${losingTrades.length}`);
   log(`Win Rate:          ${winRate.toFixed(1)}%`);
+  log(`Gain Percentage:   ${(netPnl / startingBalance * 100).toFixed(2)}%`);
   log(`Gross Profit:      $${grossProfit.toFixed(2)}`);
   log(`Gross Loss:        $${grossLoss.toFixed(2)}`);
   log(`Net P&L:           $${(netPnl >= 0 ? '+' : '')}${netPnl.toFixed(2)}`);

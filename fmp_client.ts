@@ -28,6 +28,8 @@ export class FmpApiClient {
   private apiKey: string;
   /** The internal map storing cached API responses and their expiry timestamps. */
   private memoryCache = new Map<string, CacheEntry<any>>();
+  /** The interval ID for the cache cleanup mechanism. Used to clear the interval on destruction to prevent memory leaks. */
+  private cleanupIntervalId?: NodeJS.Timeout;
   /** Internal flag tracking whether the user's FMP subscription supports 1-minute historical charts. */
   private _is1MinUnsupported = false;
 
@@ -39,7 +41,7 @@ export class FmpApiClient {
     this.apiKey = apiKey;
 
     // Prune expired cache entries every 5 minutes
-    const cacheCleanupInterval = setInterval(() => {
+    this.cleanupIntervalId = setInterval(() => {
       const now = Date.now();
       for (const [key, entry] of this.memoryCache.entries()) {
         if (now >= entry.expiry) {
@@ -47,9 +49,22 @@ export class FmpApiClient {
         }
       }
     }, 5 * 60 * 1000);
-    if (cacheCleanupInterval && typeof cacheCleanupInterval.unref === 'function') {
-      cacheCleanupInterval.unref();
+    if (this.cleanupIntervalId && typeof this.cleanupIntervalId.unref === 'function') {
+      this.cleanupIntervalId.unref();
     }
+  }
+
+  /**
+   * Cleans up resource allocations, including clearing the cache pruning interval
+   * and emptying the memory cache to prevent memory leaks.
+   * @returns void
+   */
+  public destroy(): void {
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = undefined;
+    }
+    this.memoryCache.clear();
   }
 
   /**

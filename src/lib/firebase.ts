@@ -40,24 +40,13 @@ export const db = getFirestore(app, databaseId);
 export const DEFAULT_USER_ID = 'testuser';
 
 /**
- * Computes a hash (using SHA-256 in secure context, falling back to FNV-1a) for a given text.
+ * Computes the FNV-1a (32-bit) hash for a given text as a fallback.
  *
  * @param text - The input text to hash.
- * @returns A promise that resolves to the hexadecimal hash string.
+ * @returns The FNV-1a hash hex string.
  */
-async function computeHash(text: string): Promise<string> {
+export function computeFnv1aHash(text: string): string {
   const normalized = text.trim().toLowerCase();
-
-  // If window.crypto and window.crypto.subtle are available (secure context), use SHA-256
-  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(normalized);
-    const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  // Fallback: Pure JS implementation of FNV-1a (32-bit) hashing algorithm
   let hash = 2166136261;
   for (let i = 0; i < normalized.length; i++) {
     hash ^= normalized.charCodeAt(i);
@@ -65,6 +54,30 @@ async function computeHash(text: string): Promise<string> {
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
+
+/**
+ * Computes a hash (using SHA-256 in secure context, falling back to FNV-1a) for a given text.
+ *
+ * @param text - The input text to hash.
+ * @returns A promise that resolves to the hexadecimal hash string.
+ */
+export async function computeHash(text: string): Promise<string> {
+  const normalized = text.trim().toLowerCase();
+  const cryptoObj = (typeof window !== 'undefined' && window.crypto) || (typeof globalThis !== 'undefined' && globalThis.crypto);
+
+  // If crypto and crypto.subtle are available (secure browser context or Node.js 19+), use SHA-256
+  if (cryptoObj && cryptoObj.subtle) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(normalized);
+    const hashBuffer = await cryptoObj.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Fallback: Pure JS implementation of FNV-1a (32-bit) hashing algorithm
+  return computeFnv1aHash(text);
+}
+
 
 export interface SentimentResult {
   isPositive: boolean;
