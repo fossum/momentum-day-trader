@@ -1,3 +1,9 @@
+/**
+ * @file firebase.ts
+ * @description Initializes the client-side Firebase SDK and provides helper functions
+ * for accessing Firestore and computing content hashes.
+ */
+
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -12,11 +18,33 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+/**
+ * The initialized client-side Firebase Auth service.
+ */
 export const auth = getAuth(app);
-// Use the specific databaseId for AI Studio
-export const db = getFirestore(app, "ai-studio-ebb825e0-d58e-4b6d-b706-1ca47c3b3065");
+
+// Use the specific databaseId for AI Studio, loaded from environment variables if available.
+const databaseId = (typeof process !== 'undefined' && process.env?.FIREBASE_DATABASE_ID) ||
+  (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID ||
+  "missing-db-id";
+
+/**
+ * The initialized client-side Firestore database instance.
+ */
+export const db = getFirestore(app, databaseId);
+
+/**
+ * The default user ID fallback.
+ */
 export const DEFAULT_USER_ID = 'testuser';
 
+/**
+ * Computes a hash (using SHA-256 in secure context, falling back to FNV-1a) for a given text.
+ *
+ * @param text - The input text to hash.
+ * @returns A promise that resolves to the hexadecimal hash string.
+ */
 async function computeHash(text: string): Promise<string> {
   const normalized = text.trim().toLowerCase();
 
@@ -43,7 +71,13 @@ export interface SentimentResult {
   reason: string;
 }
 
-// Fetch news sentiment from global Firestore cache
+/**
+ * Fetches the cached news sentiment analysis from the global Firestore cache database.
+ *
+ * @param ticker - The stock ticker symbol related to the news.
+ * @param headline - The news headline text used to locate the cache document.
+ * @returns A promise that resolves to the SentimentResult if found in the cache, or null if not found.
+ */
 export async function getCachedSentiment(ticker: string, headline: string): Promise<SentimentResult | null> {
   try {
     if (!headline) return null;
@@ -63,7 +97,14 @@ export async function getCachedSentiment(ticker: string, headline: string): Prom
   return null;
 }
 
-// Write news sentiment analysis results to global Firestore cache
+/**
+ * Writes the news sentiment analysis result to the global Firestore cache database.
+ *
+ * @param ticker - The stock ticker symbol related to the news.
+ * @param headline - The news headline text.
+ * @param result - The sentiment analysis result to be cached.
+ * @returns A promise that resolves when the cache write is complete.
+ */
 export async function cacheSentiment(ticker: string, headline: string, result: SentimentResult): Promise<void> {
   try {
     if (!headline) return;

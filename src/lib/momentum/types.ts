@@ -40,3 +40,28 @@ export interface TradeSetup {
   flagpoleCandles: Candle[];
   pullbackCandles: Candle[];
 }
+
+export interface SetupEvaluationResult {
+  passesPrice: boolean;
+  passesGain: boolean;
+  passesRvol: boolean;
+  passesFloat: boolean;
+  passesWindow: boolean;
+  passesCatalyst: boolean;
+  geminiPass: boolean;
+  passesPattern: boolean;
+  passesStop: boolean;
+  passesRR: boolean;
+  allPass: boolean;
+  patternResult: any;
+  requiredMinRvol: number;
+  calculatedRvol: number;
+  calculatedStopDistance: number;
+  calculatedRatio: number;
+  targetPrice: number;
+  stopPrice: number;
+  entryPrice: number;
+  geminiReason: string;
+  patternReason: string;
+}
+

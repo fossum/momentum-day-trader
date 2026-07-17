@@ -1,3 +1,9 @@
+/**
+ * @file firebaseAdmin.ts
+ * @description Provides initialized Firebase Admin SDK services (Firestore database and Auth)
+ * for use in server-side logic and backend scripts.
+ */
+
 import { initializeApp, cert, applicationDefault, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
@@ -36,5 +42,12 @@ if (!getApps().length) {
   }
 }
 
-export const adminDb = getFirestore();
+/**
+ * The initialized Firestore Admin database instance, configured with the database ID from the environment.
+ */
+export const adminDb = getFirestore(process.env.FIREBASE_DATABASE_ID || 'missing-db-id');
+
+/**
+ * The initialized Firebase Admin Auth instance.
+ */
 export const adminAuth = getAuth();

@@ -10,14 +10,12 @@ import {
   validateCatalyst,
   validateStopDistance,
   calculateTarget,
-  passesBaselineFilter,
-  passesRvolFilter,
-  passesFloatFilter,
   passesTickerFilter,
   isWithinTradingWindow,
   isAfterLunchtimeLull,
   formatCompact,
-  analyzeBullFlag
+  evaluateSetup,
+  formatChecklistReport
 } from '../hooks/usePatternDetector';
 import { EngineControls } from './execution/EngineControls';
 import { FilterSettings } from './execution/FilterSettings';
@@ -520,216 +518,87 @@ export function ExecutionEngine({
               const checkNewsCatalyst = catalystValidation === 'keywords';
               const checkGeminiSentiment = catalystValidation === 'gemini';
 
-              const passesPrice = !checkPriceRange || (liveData.price >= minPrice && liveData.price <= maxPrice);
-              const passesGain = !checkDailyGain || (selectedGainer.changesPercentage >= minGainPercent);
-              const passesRvol = !checkRelativeVol || passesRvolFilter(liveData.rvol, minRvol);
-              const hasKnownFloat = liveData.sharesOutstanding !== 0 && !!liveData.sharesOutstanding;
-              const passesFloat = !checkSharesFloat || (hasKnownFloat && passesFloatFilter(liveData.sharesOutstanding, maxFloatMillions));
-              const passesWindow = !checkTradingWindow || isWithinTradingWindow(extendedHours);
-
-              const catalystResult = validateCatalyst(liveData.catalyst);
-              const passesCatalyst = !checkNewsCatalyst || catalystResult.valid;
-
-              // Gemini news sentiment analysis check (if enabled and we have news to check)
-              let geminiPass = true;
-              let geminiReason = "";
-              let isTechnicalBreakout = false;
-              if (checkGeminiSentiment) {
-                const hasActualNews = liveData.catalyst && !liveData.catalyst.startsWith("No recent fundamental catalyst");
-                if (hasActualNews) {
-                  try {
-                    const cached = await getCachedSentiment(selectedGainer.symbol, liveData.catalyst);
-                    if (cached) {
-                      geminiPass = cached.isPositive;
-                      geminiReason = cached.reason + " (Cached)";
-                    } else {
-                      const res = await fetch('/api/news/sentiment', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          ticker: selectedGainer.symbol,
-                          headline: liveData.catalyst
-                        })
-                      });
-                      if (res.ok) {
-                        const data = await res.json();
-                        geminiPass = data.isPositive;
-                        geminiReason = data.reason;
-                        await cacheSentiment(selectedGainer.symbol, liveData.catalyst, {
-                          isPositive: geminiPass,
-                          reason: geminiReason
-                        });
-                      } else if (res.status === 500) {
-                        geminiPass = true;
-                        geminiReason = "Technical Breakout Only (500 Error)";
-                        isTechnicalBreakout = true;
-                      } else {
-                        geminiPass = false;
-                        geminiReason = `Sentiment API returned status ${res.status}`;
-                      }
-                    }
-                  } catch (err: any) {
-                    if (err.message?.includes("500")) {
-                      geminiPass = true;
-                      geminiReason = "Technical Breakout Only (500 Error)";
-                      isTechnicalBreakout = true;
-                    } else {
-                      geminiPass = false;
-                      geminiReason = `Sentiment check failed: ${err.message}`;
-                    }
-                  }
-                } else {
-                  geminiPass = false;
-                  geminiReason = "Skipped (no news catalyst found)";
-                }
-              } else {
-                geminiReason = "Bypassed (Gemini sentiment filter disabled)";
-              }
-
-              // Bull Flag Pattern Check
-              let passesPattern = false;
-              let patternReason = "";
-              let patternResult: any = null;
               const minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
-              if (checkBullFlagPattern) {
-                if (Array.isArray(candles) && candles.length >= 4) {
-                  const sorted = [...candles].reverse(); // newest first from FMP, reverse to chronological
-                  const maxProximityPercent = preferencesRef.current.maxProximityPercent ?? 2.0;
-                  const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
-                  const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
-                  patternResult = analyzeBullFlag(
-                    sorted,
-                    liveData.price,
-                    maxProximityPercent,
-                    maxFlagpoleRedCandles,
-                    maxPullbackGreenCandles,
-                    minStopDistance
-                  );
-                  passesPattern = patternResult.detected;
-                  patternReason = patternResult.reason || "";
-                } else {
-                  patternReason = `Insufficient candles (${candles?.length || 0} candles, minimum 4 required)`;
-                }
-              } else {
-                passesPattern = true;
-                patternReason = "Bypassed (Bull Flag pattern check disabled)";
-              }
-
-              // Risk Management Checks (Stop Distance & R:R)
-              let passesStop = false;
-              let stopDistStr = "N/A";
-              const entryPrice = (checkBullFlagPattern && patternResult?.detected) ? patternResult.resistanceLevel : liveData.price;
-              const stopPrice = (checkBullFlagPattern && patternResult?.detected) ? patternResult.pullbackLow : 0;
               const maxStopDistance = preferencesRef.current.maxStopDistance ?? 0.20;
-
-              if (checkStopDistance) {
-                const finalStopPrice = (stopPrice > 0 && stopPrice < entryPrice) ? stopPrice : (entryPrice * 0.98);
-                passesStop = validateStopDistance(entryPrice, finalStopPrice, maxStopDistance, minStopDistance);
-                stopDistStr = `$${(entryPrice - finalStopPrice).toFixed(2)}`;
-              } else {
-                passesStop = true;
-                stopDistStr = "Bypassed (Stop distance check disabled)";
-              }
-
-              let passesRR = false;
-              let rrRatioStr = "N/A";
-              let targetPrice = 0;
               const minRewardRiskRatio = preferencesRef.current.minRewardRiskRatio ?? 2.0;
 
-              if (checkRiskReward) {
-                const finalStopPrice = (stopPrice > 0 && stopPrice < entryPrice) ? stopPrice : (entryPrice * 0.98);
-                const targetResult = calculateTarget(entryPrice, finalStopPrice, patternResult?.nextResistance, minRewardRiskRatio, minStopDistance);
-                if (targetResult) {
-                  passesRR = true;
-                  rrRatioStr = `${targetResult.ratio}:1`;
-                  targetPrice = targetResult.targetPrice;
+              const sortedCandles = Array.isArray(candles) ? [...candles].reverse() : [];
+
+              const checkSentimentCallback = async (ticker: string, catalystText: string) => {
+                const cached = await getCachedSentiment(ticker, catalystText);
+                if (cached) {
+                  return { isPositive: cached.isPositive, reason: cached.reason + " (Cached)" };
                 }
-              } else {
-                passesRR = true;
-                rrRatioStr = "Bypassed (Risk/Reward check disabled)";
-                targetPrice = entryPrice * 1.04; // default target (4% gain)
-              }
+                const res = await fetch('/api/news/sentiment', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ticker, headline: catalystText })
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  await cacheSentiment(ticker, catalystText, {
+                    isPositive: data.isPositive,
+                    reason: data.reason
+                  });
+                  return { isPositive: data.isPositive, reason: data.reason };
+                } else if (res.status === 500) {
+                  return { isPositive: true, reason: "Technical Breakout Only (500 Error)" };
+                } else {
+                  throw new Error(`Sentiment API returned status ${res.status}`);
+                }
+              };
 
-              const allPass = passesPrice && passesGain && passesRvol && passesFloat && passesWindow && passesCatalyst && geminiPass && passesPattern && passesStop && passesRR;
-
-              // Format report
-              const statusChar = (pass: boolean) => pass ? '✓ PASS' : '✗ FAIL';
-              const floatDisplay = hasKnownFloat ? formatCompact(liveData.sharesOutstanding) : "Unknown";
-
-              const checklistItems: { label: string; details: string }[] = [];
-
-              if (checkPriceRange) {
-                checklistItems.push({
-                  label: "Price Range",
-                  details: `${statusChar(passesPrice)} ($${liveData.price.toFixed(2)} | Req: $${minPrice.toFixed(2)}-$${maxPrice.toFixed(2)})`
-                });
-              }
-              if (checkDailyGain) {
-                checklistItems.push({
-                  label: "Daily Gain",
-                  details: `${statusChar(passesGain)} (+${selectedGainer.changesPercentage.toFixed(1)}% | Req: >=${minGainPercent}%)`
-                });
-              }
-              if (checkRelativeVol) {
-                checklistItems.push({
-                  label: "Relative Vol",
-                  details: `${statusChar(passesRvol)} (${liveData.rvol}x | Req: >=${minRvol}x)`
-                });
-              }
-              if (checkSharesFloat) {
-                checklistItems.push({
-                  label: "Shares Float",
-                  details: `${statusChar(passesFloat)} (${floatDisplay} | Req: <=${formatCompact(maxFloatMillions * 1000000)})`
-                });
-              }
-              if (checkTradingWindow) {
-                checklistItems.push({
-                  label: "Trading Window",
-                  details: `${statusChar(passesWindow)} (Req: 9:30 AM-11:30 AM EST)`
-                });
-              }
-              if (checkNewsCatalyst) {
-                checklistItems.push({
-                  label: "News Catalyst",
-                  details: `${statusChar(passesCatalyst)} (${passesCatalyst ? `Keyword "${catalystResult.matchedKeyword}" found` : `No keyword matched in headline: "${liveData.catalyst || 'None'}"`})`
-                });
-              }
-              if (checkGeminiSentiment) {
-                checklistItems.push({
-                  label: "Gemini Sentiment",
-                  details: `${statusChar(geminiPass)} (${geminiReason})`
-                });
-              }
-              if (checkBullFlagPattern) {
-                checklistItems.push({
-                  label: "Bull Flag Pattern",
-                  details: `${statusChar(passesPattern)} (${passesPattern ? `Detected at Resistance $${patternResult?.resistanceLevel?.toFixed(2)}` : patternReason})`
-                });
-              }
-              if (checkStopDistance) {
-                checklistItems.push({
-                  label: "Stop Distance",
-                  details: `${statusChar(passesStop)} (${stopDistStr} | Req: $${minStopDistance.toFixed(2)}-$${maxStopDistance.toFixed(2)})`
-                });
-              }
-              if (checkRiskReward) {
-                checklistItems.push({
-                  label: "Risk/Reward",
-                  details: `${statusChar(passesRR)} (${rrRatioStr} | Req: >=${minRewardRiskRatio}:1)`
-                });
-              }
-
-              const formattedLines = checklistItems.map((item, index) => {
-                const prefix = `${index + 1}. ${item.label}:`;
-                const paddedPrefix = prefix.padEnd(22, ' ');
-                return `${paddedPrefix}${item.details}`;
+              const evalResult = await evaluateSetup({
+                ticker: selectedGainer.symbol,
+                price: liveData.price,
+                changePercent: selectedGainer.changesPercentage,
+                volume: liveData.volume || 0,
+                avgVolume: liveData.avgVolume || 1,
+                sharesOutstanding: liveData.sharesOutstanding || 0,
+                candles: sortedCandles,
+                catalyst: liveData.catalyst || '',
+                time: new Date(),
+                preferences: preferencesRef.current,
+                checkSentiment: checkSentimentCallback
               });
 
-              const report = `[EVALUATION] Buy Entrance Checklist for $${selectedGainer.symbol}:
-----------------------------------------------------------------------
-${formattedLines.join('\n')}
-----------------------------------------------------------------------
-Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANCE REQUIREMENTS'}`;
+              const {
+                passesPrice,
+                passesGain,
+                passesRvol,
+                passesFloat,
+                passesWindow,
+                passesCatalyst,
+                geminiPass,
+                passesPattern,
+                passesStop,
+                passesRR,
+                allPass,
+                patternResult,
+                calculatedStopDistance,
+                calculatedRatio,
+                targetPrice,
+                stopPrice,
+                entryPrice,
+                geminiReason,
+                patternReason
+              } = evalResult;
+
+              const hasKnownFloat = liveData.sharesOutstanding !== 0 && !!liveData.sharesOutstanding;
+              const floatDisplay = hasKnownFloat ? formatCompact(liveData.sharesOutstanding) : "Unknown";
+              const isTechnicalBreakout = geminiReason.includes("500 Error");
+
+              // Format report using the shared formatChecklistReport helper
+              const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+              const report = formatChecklistReport(
+                selectedGainer.symbol,
+                timeStr,
+                liveData.price,
+                selectedGainer.changesPercentage,
+                liveData.sharesOutstanding || 0,
+                preferencesRef.current,
+                evalResult
+              );
 
               if (allPass) {
                 addLog(report, 'success', selectedGainer.symbol);
@@ -920,15 +789,15 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 if (f.endsWith('K')) {
                   isUltraMicroFloat = true;
                 } else if (f.endsWith('M')) {
-                   const num = parseFloat(f);
-                   if (!isNaN(num) && num < 1.0) {
-                     isUltraMicroFloat = true;
-                   }
+                  const num = parseFloat(f);
+                  if (!isNaN(num) && num < 1.0) {
+                    isUltraMicroFloat = true;
+                  }
                 } else if (!f.endsWith('K') && !f.endsWith('M') && !f.endsWith('B') && f !== 'UNKNOWN') {
-                   const num = parseFloat(f.replace(/,/g, ''));
-                   if (!isNaN(num) && num < 1000000) {
-                     isUltraMicroFloat = true;
-                   }
+                  const num = parseFloat(f.replace(/,/g, ''));
+                  if (!isNaN(num) && num < 1000000) {
+                    isUltraMicroFloat = true;
+                  }
                 }
               }
               // -------------------------------
@@ -960,7 +829,7 @@ Result: ${allPass ? '✓ ALL ENTRANCE REQUIREMENTS PASSED' : '✗ FAILED ENTRANC
                 const maxFlagpoleRedCandles = preferencesRef.current.maxFlagpoleRedCandles ?? 1;
                 const maxPullbackGreenCandles = preferencesRef.current.maxPullbackGreenCandles ?? 1;
                 let minStopDistance = preferencesRef.current.minStopDistance ?? 0.01;
-                
+
                 if (isUltraMicroFloat && minStopDistance < 0.08) {
                   minStopDistance = 0.08;
                   addLog(`[RISK] Ultra-micro float detected (${activeTrade.float}). Increased minimum stop distance for pattern detection to $${minStopDistance.toFixed(2)}.`, 'info', activeTrade.ticker);

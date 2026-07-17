@@ -2,19 +2,29 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { adminDb } from '../src/lib/firebaseAdmin';
-import {
-  FmpApiClient
-} from '../fmp_client';
+import { FmpApiClient } from '../fmp_client';
 import { analyzeNewsSentiment } from '../src/lib/gemini';
 import {
-  analyzeBullFlag,
-  passesRvolFilter,
-  passesFloatFilter,
+  evaluateSetup,
   passesTickerFilter,
-  validateStopDistance,
-  calculateTarget
+  isWithinTradingWindowAt,
+  formatChecklistReport
 } from '../src/lib/momentum';
-import { UserPreferences, MarketGainer } from '../src/types';
+import { UserPreferences, MarketGainer, SimulatedTrade } from '../src/types';
+
+/**
+ * Helper to parse FMP date strings in Eastern Time.
+ * Determines the EDT (-04:00) or EST (-05:00) offset dynamically.
+ * 
+ * @param dateStr - Date string in format "YYYY-MM-DD HH:MM:SS"
+ * @returns Parsed Date object
+ */
+function parseFmpDate(dateStr: string): Date {
+  const datePart = dateStr.split(' ')[0];
+  const month = parseInt(datePart.split('-')[1]);
+  const offset = (month >= 4 && month <= 10) ? '-04:00' : '-05:00';
+  return new Date(dateStr.replace(' ', 'T') + offset);
+}
 
 dotenv.config();
 
@@ -54,6 +64,7 @@ async function main() {
 
   const todayStr = getEasternISOString().split('T')[0].replace(/-/g, '');
   const logFilePath = path.join(logsDir, `backtest_${userId}_${todayStr}.log`);
+  fs.writeFileSync(logFilePath, ''); // Overwrite log file on startup
 
   const log = (message: string) => {
     const timestamp = getEasternISOString();
@@ -124,6 +135,9 @@ async function main() {
       catalystValidation: 'gemini'
     };
   }
+
+  const allCompletedTrades: SimulatedTrade[] = [];
+  let balance = 100;
 
   const fmpApiKey = process.env.FMP_API_KEY;
   if (!fmpApiKey) {
@@ -200,41 +214,32 @@ async function main() {
     // FMP returns newest to oldest. Reverse to oldest to newest.
     const sortedChart = [...chart].reverse();
 
-    // Filter to today 9:30 AM to 11:00 AM EST
-    const today = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
-    const todayParts = today.split('/');
-    const currentYearStr = todayParts[2];
-    const currentMonthStr = todayParts[0].padStart(2, '0');
-    const currentDayStr = todayParts[1].padStart(2, '0');
-    const todayPrefix = `${currentYearStr}-${currentMonthStr}-${currentDayStr}`;
+    // Resolve the trading day from the latest candle in the chart to prevent issues past midnight or on weekends
+    const lastChartCandle = sortedChart[sortedChart.length - 1];
+    const todayPrefix = lastChartCandle ? lastChartCandle.date.split(' ')[0] : '';
 
-    const windowCandles = sortedChart.filter((c: any) => {
-      if (!c.date) return false;
-      if (!c.date.startsWith(todayPrefix)) return false;
-      const timePart = c.date.split(' ')[1];
-      if (!timePart) return false;
-      const [hour, minute] = timePart.split(':').map(Number);
-      const isAfterOpen = hour > 9 || (hour === 9 && minute >= 30);
-      const isBeforeClose = hour < 11 || (hour === 11 && minute === 0);
-      return isAfterOpen && isBeforeClose;
+    const todayCandles = sortedChart.filter((c: any) => {
+      return c.date && c.date.startsWith(todayPrefix);
     });
 
-    if (windowCandles.length === 0) {
-      log(`[INFO] No candles found in the 9:30-11:00 window for ${gainer.symbol}`);
+    if (todayCandles.length === 0) {
+      log(`[INFO] No candles found for today prefix ${todayPrefix} for ${gainer.symbol}`);
       continue;
     }
 
-    log(`[INFO] Found ${windowCandles.length} candles in the 9:30-11:00 window for ${gainer.symbol}. Processing...`);
+    log(`[INFO] Found ${todayCandles.length} candles today for ${gainer.symbol}. Processing...`);
 
-    // Fetch quote and profile data to check float and rvol
+    // Fetch quote, profile, float and news data to check float, avgVolume and pre-market offset
     let floatShares = 0;
     let avgVolume = 1;
+    let dailyVolume = 0;
     let catalystText = "No recent fundamental catalyst found on FMP.";
     try {
-      const [floatRes, profileRes, newsRes] = await Promise.allSettled([
+      const [floatRes, profileRes, newsRes, quoteRes] = await Promise.allSettled([
         fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
         fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000),
-        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${gainer.symbol}&limit=5&apikey=${fmpApiKey}`, 300000)
+        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${gainer.symbol}&limit=5&apikey=${fmpApiKey}`, 300000),
+        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${gainer.symbol}&apikey=${fmpApiKey}`, 3600000)
       ]);
 
       if (floatRes.status === 'fulfilled' && Array.isArray(floatRes.value) && floatRes.value.length > 0) {
@@ -246,15 +251,30 @@ async function main() {
       if (newsRes.status === 'fulfilled' && Array.isArray(newsRes.value) && newsRes.value.length > 0 && newsRes.value[0].title) {
         catalystText = `News: ${newsRes.value[0].title}`;
       }
+      if (quoteRes.status === 'fulfilled' && Array.isArray(quoteRes.value) && quoteRes.value.length > 0) {
+        dailyVolume = quoteRes.value[0].volume || 0;
+      }
     } catch (e: any) {
-      log(`[WARN] FMP Profile fetch failed for ${gainer.symbol}: ${e.message}`);
+      log(`[WARN] FMP Profile/Quote fetch failed for ${gainer.symbol}: ${e.message}`);
     }
 
-    let activeTrade: { entry: number, stop: number, target: number } | null = null;
+    const totalRegularVol = todayCandles.reduce((sum, c) => sum + (c.volume || 0), 0);
+    const preMarketVol = Math.max(0, dailyVolume - totalRegularVol);
+
+    let activeTrade: {
+      entry: number;
+      stop: number;
+      target: number;
+      shares: number;
+      entryTime: string;
+      floatDisplay: string;
+      catalyst: string;
+    } | null = null;
 
     // Simulate chronological progression
-    for (let i = 0; i < windowCandles.length; i++) {
-      const currentCandle = windowCandles[i];
+    for (let i = 0; i < todayCandles.length; i++) {
+      const currentCandle = todayCandles[i];
+      const candleTime = parseFmpDate(currentCandle.date);
       const timeStr = currentCandle.date.split(' ')[1];
       const livePrice = currentCandle.close;
 
@@ -264,101 +284,169 @@ async function main() {
         const high = currentCandle.high;
 
         if (low <= activeTrade.stop) {
-          log(`[TRADE] ${timeStr} $${gainer.symbol} Stop loss hit at $${activeTrade.stop}. Exit triggered.`);
+          const exitPrice = activeTrade.stop;
+          const pnl = (exitPrice - activeTrade.entry) * activeTrade.shares;
+          balance += pnl;
+          log(`[TRADE] ${timeStr} $${gainer.symbol} Stop loss hit at $${exitPrice.toFixed(2)}. Exit triggered. P&L: $${pnl.toFixed(2)}`);
+
+          allCompletedTrades.push({
+            ticker: gainer.symbol,
+            float: activeTrade.floatDisplay,
+            catalyst: activeTrade.catalyst,
+            setup: "Bull Flag",
+            entryPrice: activeTrade.entry,
+            exitPrice: exitPrice,
+            shares: activeTrade.shares,
+            pnl: pnl,
+            target: activeTrade.target,
+            stop: activeTrade.stop
+          });
           activeTrade = null;
         } else if (high >= activeTrade.target) {
-          log(`[TRADE] ${timeStr} $${gainer.symbol} Target reached at $${activeTrade.target}. Exit triggered.`);
+          const exitPrice = activeTrade.target;
+          const pnl = (exitPrice - activeTrade.entry) * activeTrade.shares;
+          balance += pnl;
+          log(`[TRADE] ${timeStr} $${gainer.symbol} Target reached at $${exitPrice.toFixed(2)}. Exit triggered. P&L: $${pnl.toFixed(2)}`);
+
+          allCompletedTrades.push({
+            ticker: gainer.symbol,
+            float: activeTrade.floatDisplay,
+            catalyst: activeTrade.catalyst,
+            setup: "Bull Flag",
+            entryPrice: activeTrade.entry,
+            exitPrice: exitPrice,
+            shares: activeTrade.shares,
+            pnl: pnl,
+            target: activeTrade.target,
+            stop: activeTrade.stop
+          });
           activeTrade = null;
         }
         continue; // Continue to next candle after managing trade
       }
 
-      // Compute rolling volume
-      const chartUpToNow = windowCandles.slice(0, i + 1);
-      const totalVolSoFar = chartUpToNow.reduce((sum, c) => sum + (c.volume || 0), 0);
-      const currentRvol = parseFloat((totalVolSoFar / (avgVolume / 390 * chartUpToNow.length)).toFixed(2)); // approximate intraday rvol
-
-      if (preferences.checkRelativeVol && !passesRvolFilter(currentRvol, minRvol)) {
-        if (isVerbose) log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: RVol ${currentRvol} < ${minRvol}`);
+      // Check if we are inside the trading window (constants 9:30 AM - 11:30 AM EST)
+      const isWithinWindow = isWithinTradingWindowAt(candleTime, preferences.extendedTradingHours ?? false);
+      if (!isWithinWindow) {
         continue;
       }
 
-      const hasKnownFloat = floatShares !== 0;
-      if (preferences.checkSharesFloat && (!hasKnownFloat || !passesFloatFilter(floatShares, maxFloatMillions))) {
-        if (isVerbose && i === 0) log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: Float ${(floatShares/1000000).toFixed(2)}M > ${maxFloatMillions}M`);
-        continue;
-      }
+      // Compute rolling volume (including pre-market volume offset)
+      const chartUpToNow = todayCandles.slice(0, i + 1);
+      const regularVolSoFar = chartUpToNow.reduce((sum, c) => sum + (c.volume || 0), 0);
+      const totalVolSoFar = preMarketVol + regularVolSoFar;
 
-      if (preferences.checkBullFlagPattern) {
-        const patternResult = analyzeBullFlag(
-          chartUpToNow,
+      const checkSentimentCallback = async (ticker: string, catalystText: string) => {
+        const hasActualNews = catalystText && !catalystText.startsWith("No recent");
+        if (hasActualNews) {
+          const sentimentRes = await analyzeNewsSentiment(ticker, catalystText);
+          return { isPositive: sentimentRes.isPositive, reason: sentimentRes.reason };
+        } else {
+          return { isPositive: false, reason: "No actual news" };
+        }
+      };
+
+      const evalResult = await evaluateSetup({
+        ticker: gainer.symbol,
+        price: livePrice,
+        changePercent: gainer.changesPercentage,
+        volume: totalVolSoFar,
+        avgVolume,
+        sharesOutstanding: floatShares,
+        candles: chartUpToNow,
+        catalyst: catalystText,
+        time: candleTime,
+        preferences,
+        checkSentiment: checkSentimentCallback
+      });
+
+      const shouldLogReport = evalResult.allPass || evalResult.passesPattern || (isVerbose && evalResult.passesPrice && evalResult.passesGain);
+
+      if (shouldLogReport) {
+        const report = formatChecklistReport(
+          gainer.symbol,
+          timeStr,
           livePrice,
-          preferences.maxProximityPercent ?? 2.0,
-          preferences.maxFlagpoleRedCandles ?? 1,
-          preferences.maxPullbackGreenCandles ?? 1
+          gainer.changesPercentage,
+          floatShares,
+          preferences,
+          evalResult
         );
+        log(report);
+      }
 
-        if (isVerbose && !patternResult.detected) {
-          log(`[VERBOSE] ${timeStr} $${gainer.symbol} Rejected: ${JSON.stringify(patternResult)}`);
+      if (evalResult.allPass) {
+        const positionSizeSetting = (preferences.positionSize || "2000").toString().trim();
+        let computedShares = 1;
+        if (positionSizeSetting.endsWith("%")) {
+          const pct = parseFloat(positionSizeSetting.replace("%", ""));
+          const maxCashForTrade = balance * (pct / 100);
+          computedShares = Math.max(1, Math.floor(maxCashForTrade / evalResult.entryPrice));
+        } else {
+          computedShares = parseInt(positionSizeSetting) || 1;
         }
 
-        if (patternResult.detected) {
-          // Sentiment Check
-          let sentimentPass = true;
-          if (preferences.catalystValidation === 'gemini') {
-            const hasActualNews = catalystText && !catalystText.startsWith("No recent");
-            if (hasActualNews) {
-              try {
-                const sentimentRes = await analyzeNewsSentiment(gainer.symbol, catalystText);
-                sentimentPass = sentimentRes.isPositive;
-              } catch (e: any) {
-                sentimentPass = false;
-              }
-            } else {
-              sentimentPass = false;
-            }
-          }
-
-          if (!sentimentPass) {
-            continue; // Skip if sentiment is negative
-          }
-
-          const entryPrice = patternResult.resistanceLevel || livePrice;
-          const pullbackLow = patternResult.pullbackLow || 0;
-          const minStopDistance = preferences.minStopDistance ?? 0.01;
-          const maxStopDistance = preferences.maxStopDistance ?? 0.20;
-          const finalStopPrice = (pullbackLow > 0 && pullbackLow < entryPrice) ? pullbackLow : (entryPrice * 0.98);
-
-          if (preferences.checkStopDistance && !validateStopDistance(entryPrice, finalStopPrice, maxStopDistance, minStopDistance)) {
-            continue; // Stop distance filter
-          }
-
-          let targetPrice = entryPrice * 1.04;
-          if (preferences.checkRiskReward) {
-            const minRR = preferences.minRewardRiskRatio ?? 2.0;
-            const targetResult = calculateTarget(entryPrice, finalStopPrice, patternResult.nextResistance, minRR, minStopDistance);
-            if (!targetResult) {
-              continue; // Risk reward filter
-            }
-            targetPrice = targetResult.targetPrice;
-          }
-
-          // Found a valid setup
-          log(`[SETUP] ${timeStr} $${gainer.symbol} Bull Flag Detected! Entry: $${entryPrice.toFixed(2)}, Stop: $${finalStopPrice.toFixed(2)}, Target: $${targetPrice.toFixed(2)}`);
-
-          activeTrade = {
-            entry: entryPrice,
-            stop: finalStopPrice,
-            target: targetPrice
-          };
-        }
+        activeTrade = {
+          entry: evalResult.entryPrice,
+          stop: evalResult.stopPrice,
+          target: evalResult.targetPrice,
+          shares: computedShares,
+          entryTime: timeStr,
+          floatDisplay: floatShares !== 0 ? `${(floatShares / 1000000).toFixed(2)}M` : "Unknown",
+          catalyst: catalystText
+        };
       }
     }
 
     if (activeTrade) {
-      log(`[TRADE] 11:00:00 $${gainer.symbol} Trade still open at end of window. Closing at last price.`);
+      const lastCandle = todayCandles[todayCandles.length - 1];
+      const endTimeStr = lastCandle ? lastCandle.date.split(' ')[1] : '11:30:00';
+      const exitPrice = lastCandle ? lastCandle.close : activeTrade.entry;
+      const pnl = (exitPrice - activeTrade.entry) * activeTrade.shares;
+      balance += pnl;
+      log(`[TRADE] ${endTimeStr} $${gainer.symbol} Trade still open at end of window. Closing at last price $${exitPrice.toFixed(2)}. P&L: $${pnl.toFixed(2)}`);
+
+      allCompletedTrades.push({
+        ticker: gainer.symbol,
+        float: activeTrade.floatDisplay,
+        catalyst: activeTrade.catalyst,
+        setup: "Bull Flag",
+        entryPrice: activeTrade.entry,
+        exitPrice: exitPrice,
+        shares: activeTrade.shares,
+        pnl: pnl,
+        target: activeTrade.target,
+        stop: activeTrade.stop
+      });
+      activeTrade = null;
     }
   }
+
+  log("\n======================================================================");
+  log("                      BACKTEST PERFORMANCE SUMMARY                    ");
+  log("======================================================================");
+  log(`Starting Balance:  $${(100000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  log(`Ending Balance:    $${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+
+  const totalTrades = allCompletedTrades.length;
+  const winningTrades = allCompletedTrades.filter(t => t.pnl > 0);
+  const losingTrades = allCompletedTrades.filter(t => t.pnl <= 0);
+  const winRate = totalTrades > 0 ? (winningTrades.length / totalTrades) * 100 : 0;
+
+  const grossProfit = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const grossLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
+  const netPnl = grossProfit - grossLoss;
+  const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss) : grossProfit > 0 ? Infinity : 1.0;
+
+  log(`Total Trades:      ${totalTrades}`);
+  log(`Winning Trades:    ${winningTrades.length}`);
+  log(`Losing Trades:     ${losingTrades.length}`);
+  log(`Win Rate:          ${winRate.toFixed(1)}%`);
+  log(`Gross Profit:      $${grossProfit.toFixed(2)}`);
+  log(`Gross Loss:        $${grossLoss.toFixed(2)}`);
+  log(`Net P&L:           $${(netPnl >= 0 ? '+' : '')}${netPnl.toFixed(2)}`);
+  log(`Profit Factor:     ${profitFactor === Infinity ? 'Infinity' : profitFactor.toFixed(2)}`);
+  log("======================================================================\n");
 
   log(`Backtest complete!`);
   process.exit(0);
