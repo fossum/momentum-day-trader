@@ -1,9 +1,20 @@
+# Node dependencies
 node_modules/
+
+# Build output
 build/
 dist/
 coverage/
+
+# Other files
 .DS_Store
-*.log
+
+# Environment variable files
+service-account.json
+*.key
+*.p12
 .env*
 !.env.example
-/logs
+
+# Log files
+logs/

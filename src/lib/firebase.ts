@@ -1,3 +1,9 @@
+/**
+ * @file firebase.ts
+ * @description Initializes the client-side Firebase SDK and provides helper functions
+ * for accessing Firestore and computing content hashes.
+ */
+
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -12,23 +18,35 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+/**
+ * The initialized client-side Firebase Auth service.
+ */
 export const auth = getAuth(app);
-// Use the specific databaseId for AI Studio
-export const db = getFirestore(app, "ai-studio-ebb825e0-d58e-4b6d-b706-1ca47c3b3065");
 
-async function computeHash(text: string): Promise<string> {
+// Use the specific databaseId for AI Studio, loaded from environment variables if available.
+const databaseId = (typeof process !== 'undefined' && process.env?.FIREBASE_DATABASE_ID) ||
+  (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID ||
+  "missing-db-id";
+
+/**
+ * The initialized client-side Firestore database instance.
+ */
+export const db = getFirestore(app, databaseId);
+
+/**
+ * The default user ID fallback.
+ */
+export const DEFAULT_USER_ID = 'testuser';
+
+/**
+ * Computes the FNV-1a (32-bit) hash for a given text as a fallback.
+ *
+ * @param text - The input text to hash.
+ * @returns The FNV-1a hash hex string.
+ */
+export function computeFnv1aHash(text: string): string {
   const normalized = text.trim().toLowerCase();
-
-  // If window.crypto and window.crypto.subtle are available (secure context), use SHA-256
-  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(normalized);
-    const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  // Fallback: Pure JS implementation of FNV-1a (32-bit) hashing algorithm
   let hash = 2166136261;
   for (let i = 0; i < normalized.length; i++) {
     hash ^= normalized.charCodeAt(i);
@@ -37,12 +55,42 @@ async function computeHash(text: string): Promise<string> {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+/**
+ * Computes a hash (using SHA-256 in secure context, falling back to FNV-1a) for a given text.
+ *
+ * @param text - The input text to hash.
+ * @returns A promise that resolves to the hexadecimal hash string.
+ */
+export async function computeHash(text: string): Promise<string> {
+  const normalized = text.trim().toLowerCase();
+  const cryptoObj = (typeof window !== 'undefined' && window.crypto) || (typeof globalThis !== 'undefined' && globalThis.crypto);
+
+  // If crypto and crypto.subtle are available (secure browser context or Node.js 19+), use SHA-256
+  if (cryptoObj && cryptoObj.subtle) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(normalized);
+    const hashBuffer = await cryptoObj.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Fallback: Pure JS implementation of FNV-1a (32-bit) hashing algorithm
+  return computeFnv1aHash(text);
+}
+
+
 export interface SentimentResult {
   isPositive: boolean;
   reason: string;
 }
 
-// Fetch news sentiment from global Firestore cache
+/**
+ * Fetches the cached news sentiment analysis from the global Firestore cache database.
+ *
+ * @param ticker - The stock ticker symbol related to the news.
+ * @param headline - The news headline text used to locate the cache document.
+ * @returns A promise that resolves to the SentimentResult if found in the cache, or null if not found.
+ */
 export async function getCachedSentiment(ticker: string, headline: string): Promise<SentimentResult | null> {
   try {
     if (!headline) return null;
@@ -62,7 +110,14 @@ export async function getCachedSentiment(ticker: string, headline: string): Prom
   return null;
 }
 
-// Write news sentiment analysis results to global Firestore cache
+/**
+ * Writes the news sentiment analysis result to the global Firestore cache database.
+ *
+ * @param ticker - The stock ticker symbol related to the news.
+ * @param headline - The news headline text.
+ * @param result - The sentiment analysis result to be cached.
+ * @returns A promise that resolves when the cache write is complete.
+ */
 export async function cacheSentiment(ticker: string, headline: string, result: SentimentResult): Promise<void> {
   try {
     if (!headline) return;

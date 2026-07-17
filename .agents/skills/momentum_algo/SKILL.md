@@ -13,7 +13,7 @@ The code must filter incoming live top gainers from the FMP API and only pass a 
 *   **Price:** $2.00 <= Price <= $20.00
 *   **Float:** < 20,000,000 shares
 *   **Daily Gain:** >= 10%
-*   **Relative Volume (RVOL):** >= 5x the 14-day average for the current time of day.
+*   **Relative Volume (RVOL):** >= 5x the 14-day average. **CRITICAL FIX:** After 10:30 AM EST (the "lunchtime lull"), breakouts are notoriously weak. The minimum RVOL required to take a trade after 10:30 AM MUST be at least 20x.
 *   **Time Window:** Only process signals between 09:30 AM and 11:30 AM EST (default). An `extendedTradingHours` preference allows extending to 4:00 PM EST.
 
 ## 2. Catalyst Verification (The News Filter)
@@ -44,11 +44,13 @@ The system should prepare to trigger a market order when the News Catalyst is va
 ## 5. Risk Management
 *   **Stop Loss:** Set at the lowest price of the Phase B pullback candles.
 *   **Maximum Stop Distance:** $0.20 per share. If the pullback depth exceeds $0.20, do not take the trade.
+*   **Ultra-Micro Floats:** For stocks with a float under 1,000,000 shares (e.g., ending in 'K' or < 1M), increase the minimum stop distance to $0.08 and reduce the calculated position size by 50% to manage higher volatility risk.
 *   **Reward:Risk Ratio:** Minimum 2:1. If the distance from entry to the target does not provide at least 2x the stop distance, do not take the trade.
 *   **Target Price:** Derived from the 2:1 minimum R:R ratio (entry + 2 × stop distance), or the next resistance level if it provides >= 2:1.
 
-## 6. Failed Breakout Bailout
-*   If the price does not surge within the first 1–2 polling cycles after entry (price is flat or declining), trigger an immediate exit at market price.
+## 6. Failed Breakout Bailout & Scratch Limits
+*   **Bailout:** If the price does not surge within the first 2 minutes after entry (price is flat or declining below entry), trigger an immediate bailout exit at market price.
+*   **Scratch:** If the setup stalls and fails to hit the target or stop loss within 5 minutes of entry, exit the trade at market price to free up capital.
 *   Do not hold a failed breakout hoping it will recover.
 
 ## 7. Architecture

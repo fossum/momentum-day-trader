@@ -2,11 +2,6 @@
 trigger: always_on
 ---
 
----
-title: File Authoring & Tool Discipline
-description: Enforces strict guardrails on how the agent writes, updates, and structures source files and configs.
----
-
 # File Authoring Standards
 
 ## 1. Code Integrity & Completeness

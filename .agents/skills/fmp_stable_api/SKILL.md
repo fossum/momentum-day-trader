@@ -155,3 +155,20 @@ FMP has deprecated legacy `/api/v3/*` endpoints for newly generated API keys, re
     }
   ]
   ```
+
+## 7. FMP API Error Handling & Subscription Constraints
+
+Further documentation: https://site.financialmodelingprep.com/developer/docs/quickstart
+When interacting with FMP APIs, the following HTTP status codes commonly indicate credentials or subscription entitlement issues:
+
+*   **HTTP 402 (Payment Required):**
+    *   **Meaning:** The requested endpoint or dataset (e.g., 1-minute historical charts) is not supported under the user's current subscription plan tier (e.g., Free, Starter), or the daily request limit has been exhausted.
+    *   **Handling Strategy:** Log the error clearly noting that the request is not supported by the FMP subscription, then dynamically bypass the endpoint (e.g., setting a bypass flag) and fall back to another data source or a lower-resolution chart.
+*   **HTTP 403 (Forbidden):**
+    *   **Meaning:** Attempting to access a deprecated legacy `/api/v3/*` endpoint with a newly generated key.
+    *   **Handling Strategy:** Ensure the stable endpoint path `/stable/*` is being queried.
+*   **HTTP 429 (Too Many Requests):**
+    *   **Meaning:** The user has exceeded the daily request limit for the current FMP API key.
+    *   **Handling Strategy:** Log that the daily request limit has been exceeded. Implement client-side caching strategies.
+
+

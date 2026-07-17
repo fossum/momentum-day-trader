@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserPreferences } from '../../types';
 import { X, Check, RefreshCw } from 'lucide-react';
+import { auth, DEFAULT_USER_ID } from '../../lib/firebase';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -44,7 +45,7 @@ export function SettingsModal({
       minRvol: 5.0,
       maxFloatMillions: 20,
       maxStopDistance: 0.20,
-      minStopDistance: 0.05,
+      minStopDistance: 0.01,
       minRewardRiskRatio: 2.0,
       maxProximityPercent: 2.0,
       simulationSpeed: 6000,
@@ -71,7 +72,12 @@ export function SettingsModal({
         >
           <X className="h-5 w-5" />
         </button>
-        <h2 className="mb-6 text-xl font-bold text-zinc-100">Settings</h2>
+        <div className="mb-6 flex items-center justify-between pr-8">
+          <h2 className="text-xl font-bold text-zinc-100">Settings</h2>
+          <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900/60 px-2 py-0.5 rounded border border-zinc-800" title="Active user identity">
+            ID: {auth.currentUser?.uid || DEFAULT_USER_ID}
+          </span>
+        </div>
         
         <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
           <div>
@@ -186,8 +192,8 @@ export function SettingsModal({
                   <input
                     type="number"
                     step="0.01"
-                    value={preferences.minStopDistance ?? 0.05}
-                    onChange={(e) => setPreferences({ ...preferences, minStopDistance: parseFloat(e.target.value) || 0.05 })}
+                    value={preferences.minStopDistance ?? 0.01}
+                    onChange={(e) => setPreferences({ ...preferences, minStopDistance: parseFloat(e.target.value) || 0.01 })}
                     className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
                   />
                 </div>

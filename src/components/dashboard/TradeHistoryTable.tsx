@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trade } from '../../types';
-import { Search, Trash2, Clock, Calendar } from 'lucide-react';
+import { Search, Trash2, Clock, Calendar, Download } from 'lucide-react';
 import { format } from 'date-fns';
 import { calculateTradePnlPercent } from '../../lib/utils';
+import { auth, DEFAULT_USER_ID } from '../../lib/firebase';
 
 interface TradeHistoryTableProps {
   trades: Trade[];
@@ -31,6 +32,48 @@ export function TradeHistoryTable({
   onClearHistory,
   strategies
 }: TradeHistoryTableProps) {
+  const [logExists, setLogExists] = useState(false);
+  const [checkingLog, setCheckingLog] = useState(true);
+  const userId = auth.currentUser?.uid || DEFAULT_USER_ID;
+
+  useEffect(() => {
+    if (!userId) {
+      setLogExists(false);
+      setCheckingLog(false);
+      return;
+    }
+
+    const checkLog = async () => {
+      try {
+        const res = await fetch(`/api/logs/exists?userId=${encodeURIComponent(userId)}`);
+        const data = await res.json();
+        setLogExists(!!data.exists);
+      } catch (err) {
+        console.warn('Failed to check if user log exists:', err);
+        setLogExists(false);
+      } finally {
+        setCheckingLog(false);
+      }
+    };
+
+    checkLog();
+
+    // Check periodically since logs can be generated as they run the simulation
+    const interval = setInterval(checkLog, 10000);
+    return () => clearInterval(interval);
+  }, [userId, trades]);
+
+  const handleDownloadLog = () => {
+    if (!userId) return;
+    const url = `/api/logs/download?userId=${encodeURIComponent(userId)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${userId}.log`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Advanced Filters Bar */}
@@ -79,6 +122,19 @@ export function TradeHistoryTable({
 
         {/* Actions Trigger */}
         <div className="flex items-center justify-end gap-2">
+          <button
+            disabled={!logExists || checkingLog}
+            onClick={handleDownloadLog}
+            title={logExists ? "Download local application/decision log file" : "No decision log file found for the current user"}
+            className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none ${
+              logExists
+                ? 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer'
+                : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 cursor-not-allowed opacity-50'
+            }`}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download User Log
+          </button>
           {trades.length > 0 && (
             <>
               <button

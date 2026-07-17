@@ -5,3 +5,5 @@ export * from './risk';
 export * from './filters';
 export * from './tradingWindow';
 export * from './catalysts';
+export * from './evaluation';
+

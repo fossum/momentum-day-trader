@@ -90,7 +90,7 @@ export function detectBullFlag(
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
   maxPullbackGreenCandles: number = 1,
-  minStopDistance: number = 0.05
+  minStopDistance: number = 0.01
 ): BullFlagResult | null {
   if (candles.length === 0) return null;
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -208,7 +208,7 @@ export function analyzeBullFlag(
   maxProximityPercent: number = 2.0,
   maxFlagpoleRedCandles: number = 1,
   maxPullbackGreenCandles: number = 1,
-  minStopDistance: number = 0.05
+  minStopDistance: number = 0.01
 ): BullFlagDiagnostic {
   if (candles.length === 0) return { detected: false, reason: "No candle data" };
   const lastDate = getDatePart(candles[candles.length - 1].date);
@@ -322,13 +322,21 @@ export function analyzeBullFlag(
               failureReason = `Pullback candle low broke below the 9 EMA`;
             }
           } else {
-            failureReason = `Pullback candles are not all red/doji (close <= open)`;
+            if (maxPullbackGreenCandles > 0) {
+              failureReason = `Pullback candles are not all red/doji (allowing up to ${maxPullbackGreenCandles} micro-green)`;
+            } else {
+              failureReason = `Pullback candles are not all red/doji (close <= open)`;
+            }
           }
         } else {
           failureReason = `Flagpole candles are not making higher highs`;
         }
       } else {
-        failureReason = `Flagpole candles are not all green (close > open)`;
+        if (maxFlagpoleRedCandles > 0) {
+          failureReason = `Flagpole candles are not all green (allowing up to ${maxFlagpoleRedCandles} micro-red/doji)`;
+        } else {
+          failureReason = `Flagpole candles are not all green (close > open)`;
+        }
       }
 
       if (score > bestScore) {

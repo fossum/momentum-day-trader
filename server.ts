@@ -5,6 +5,7 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import fs from "fs";
 import { analyzeNewsSentiment } from "./src/lib/gemini";
+import { FmpApiClient } from "./fmp_client";
 
 dotenv.config();
 
@@ -63,159 +64,14 @@ function logUserDecision(userId: string | undefined, message: string, level: str
   }
 }
 
-interface CacheEntry<T> {
-  value: T;
-  expiry: number;
-}
+let fmpClient: FmpApiClient;
 
-const memoryCache = new Map<string, CacheEntry<any>>();
 
-// Prune expired cache entries every 5 minutes to prevent memory leaks
-const cacheCleanupInterval = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of memoryCache.entries()) {
-    if (now >= entry.expiry) {
-      memoryCache.delete(key);
-    }
-  }
-}, 5 * 60 * 1000);
-if (cacheCleanupInterval && typeof cacheCleanupInterval.unref === 'function') {
-  cacheCleanupInterval.unref();
-}
-
-async function fetchWithCache<T>(url: string, ttlMs: number, headers?: any): Promise<T> {
-  const cached = memoryCache.get(url);
-  if (cached && Date.now() < cached.expiry) {
-    return cached.value;
-  }
-
-  const options = headers ? { headers } : {};
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    throw new Error(`FMP API error: status ${res.status}`);
-  }
-  const data = await res.json();
-  memoryCache.set(url, {
-    value: data,
-    expiry: Date.now() + ttlMs
-  });
-  return data;
-}
-
-// Helper to decompose 5-minute candles into 1-minute candles
-function decompose5MinTo1Min(fiveMinCandles: any[]): any[] {
-  const oneMinCandles: any[] = [];
-  for (const c5 of fiveMinCandles) {
-    if (!c5.date || c5.open === undefined || c5.close === undefined) continue;
-
-    const dateParts = c5.date.split(' ');
-    if (dateParts.length !== 2) {
-      oneMinCandles.push(c5);
-      continue;
-    }
-    const [ymd, hms] = dateParts;
-    const [year, month, day] = ymd.split('-').map(Number);
-    const [hours, minutes, seconds] = hms.split(':').map(Number);
-
-    const baseDate = new Date(year, month - 1, day, hours, minutes, seconds);
-    if (isNaN(baseDate.getTime())) {
-      oneMinCandles.push(c5);
-      continue;
-    }
-
-    const open = parseFloat(c5.open);
-    const close = parseFloat(c5.close);
-    const high = parseFloat(c5.high);
-    const low = parseFloat(c5.low);
-    const vol = parseFloat(c5.volume) || 0;
-
-    const isGreen = close >= open;
-    const prices: number[] = [open];
-
-    if (isGreen) {
-      prices.push(low + (open - low) * 0.5);
-      prices.push(low);
-      prices.push(high - (high - close) * 0.5);
-      prices.push(high);
-      prices.push(close);
-    } else {
-      prices.push(high - (high - open) * 0.5);
-      prices.push(high);
-      prices.push(low + (close - low) * 0.5);
-      prices.push(low);
-      prices.push(close);
-    }
-
-    for (let m = 0; m < 5; m++) {
-      const candleDate = new Date(baseDate.getTime() + m * 60000);
-
-      const cYear = candleDate.getFullYear();
-      const cMonth = String(candleDate.getMonth() + 1).padStart(2, '0');
-      const cDay = String(candleDate.getDate()).padStart(2, '0');
-      const cHours = String(candleDate.getHours()).padStart(2, '0');
-      const cMinutes = String(candleDate.getMinutes()).padStart(2, '0');
-      const cSeconds = String(candleDate.getSeconds()).padStart(2, '0');
-      const dateStr = `${cYear}-${cMonth}-${cDay} ${cHours}:${cMinutes}:${cSeconds}`;
-
-      const cOpen = prices[m];
-      const cClose = prices[m + 1] !== undefined ? prices[m + 1] : close;
-      const cHigh = Math.max(cOpen, cClose);
-      const cLow = Math.min(cOpen, cClose);
-      const cVol = Math.round((vol / 5) * (0.8 + 0.4 * Math.random()));
-
-      oneMinCandles.push({
-        date: dateStr,
-        open: parseFloat(cOpen.toFixed(4)),
-        high: parseFloat(cHigh.toFixed(4)),
-        low: parseFloat(cLow.toFixed(4)),
-        close: parseFloat(cClose.toFixed(4)),
-        volume: cVol
-      });
-    }
-  }
-  return oneMinCandles;
-}
-
-// Helper to generate mock 1-minute candles from a starting price
-function generateMock1MinCandles(ticker: string, currentPrice: number): any[] {
-  const candles: any[] = [];
-  let price = currentPrice;
-  const now = new Date();
-  for (let i = 0; i < 120; i++) {
-    const candleDate = new Date(now.getTime() - i * 60000);
-    const cYear = candleDate.getFullYear();
-    const cMonth = String(candleDate.getMonth() + 1).padStart(2, '0');
-    const cDay = String(candleDate.getDate()).padStart(2, '0');
-    const cHours = String(candleDate.getHours()).padStart(2, '0');
-    const cMinutes = String(candleDate.getMinutes()).padStart(2, '0');
-    const cSeconds = String(candleDate.getSeconds()).padStart(2, '0');
-    const dateStr = `${cYear}-${cMonth}-${cDay} ${cHours}:${cMinutes}:${cSeconds}`;
-
-    const percentChange = (Math.random() - 0.48) * 0.005; // -0.24% to +0.26%
-    const open = price;
-    const close = price * (1 + percentChange);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.002);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.002);
-    const volume = Math.floor(5000 + Math.random() * 20000);
-
-    candles.push({
-      date: dateStr,
-      open: parseFloat(open.toFixed(4)),
-      high: parseFloat(high.toFixed(4)),
-      low: parseFloat(low.toFixed(4)),
-      close: parseFloat(close.toFixed(4)),
-      volume
-    });
-
-    price = close;
-  }
-  return candles;
-}
 
 // Helper to fetch live quote price
 async function fetchCurrentPrice(ticker: string, key: string): Promise<number> {
   try {
-    const data = await fetchWithCache<any[]>(
+    const data = await fmpClient.fetchWithCache<any[]>(
       `https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`,
       10000 // 10s cache
     );
@@ -273,15 +129,17 @@ async function startServer() {
     return key;
   };
 
+  fmpClient = new FmpApiClient(getFmpKey());
+
   app.get("/api/stock/:ticker/quote", async (req, res) => {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
 
       const [quoteRes, floatRes, profileRes] = await Promise.allSettled([
-        fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000), // 10s
-        fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
-        fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`, 3600000) // 1h
+        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000), // 10s
+        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
+        fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`, 3600000) // 1h
       ]);
 
       if (quoteRes.status !== 'fulfilled') {
@@ -423,10 +281,10 @@ async function startServer() {
 
       try {
         const [quoteRes, floatRes, profileRes, newsRes] = await Promise.allSettled([
-          fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000), // 10s
-          fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
-          fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
-          fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`, 300000) // 5m
+          fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/quote?symbol=${ticker}&apikey=${key}`, 10000), // 10s
+          fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/shares-float?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
+          fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/profile?symbol=${ticker}&apikey=${key}`, 3600000), // 1h
+          fmpClient.fetchWithCache<any>(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=5&apikey=${key}`, 300000) // 5m
         ]);
 
         if (quoteRes.status === 'fulfilled') {
@@ -461,7 +319,7 @@ async function startServer() {
       // Fetch stock splits catalyst (within last/upcoming 7 days)
       let splitCatalyst: string | null = null;
       try {
-        const splitsData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/splits?symbol=${ticker}&apikey=${key}`, 3600000); // 1h
+        const splitsData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/splits?symbol=${ticker}&apikey=${key}`, 3600000); // 1h
         if (Array.isArray(splitsData) && splitsData.length > 0) {
           const recentSplit = splitsData.find((s: any) => {
             if (!s.date) return false;
@@ -482,7 +340,7 @@ async function startServer() {
       // Fetch insider trading catalyst (purchases within last 30 days)
       let insiderCatalyst: string | null = null;
       try {
-        const insiderData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/insider-trading/search?symbol=${ticker}&limit=10&apikey=${key}`, 3600000); // 1h
+        const insiderData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/insider-trading/search?symbol=${ticker}&limit=10&apikey=${key}`, 3600000); // 1h
         if (Array.isArray(insiderData) && insiderData.length > 0) {
           const recentPurchase = insiderData.find((t: any) => {
             if (!t.transactionDate || !t.transactionType) return false;
@@ -546,7 +404,7 @@ async function startServer() {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const data = await fetchWithCache(`https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`, 60000); // 1m
+      const data = await fmpClient.fetchWithCache(`https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`, 60000); // 1m
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -554,101 +412,73 @@ async function startServer() {
   });
 
   app.get("/api/stock/:ticker/chart/1min", async (req, res) => {
-    const key = getFmpKey();
-    const ticker = req.params.ticker.toUpperCase();
-    let data: any[] = [];
-    let isFallback = false;
-
-    // 1. Try fetching real 1-minute candles
     try {
-      data = await fetchWithCache<any[]>(
+      const key = getFmpKey();
+      const ticker = req.params.ticker.toUpperCase();
+
+      if (fmpClient.is1MinUnsupported) {
+        return res.status(403).json({ error: "FMP Subscription does not support 1-minute historical charts." });
+      }
+
+      const data = await fmpClient.fetchWithCache<any[]>(
         `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${ticker}&apikey=${key}`,
-        60000 // 1 minute cache
+        60000, // 1 minute cache
+        { is1Min: true }
       );
-    } catch (err: any) {
-      console.warn(`[FMP 1MIN CHART ERROR] Failed for ${ticker}: ${err.message}. Attempting 5-min fallback...`);
-      isFallback = true;
-    }
 
-    // 2. Fallback to 5-min chart decomposition if 1-min chart failed or returned empty
-    if (isFallback || !Array.isArray(data) || data.length === 0) {
-      try {
-        const fiveMinData = await fetchWithCache<any[]>(
-          `https://financialmodelingprep.com/stable/historical-chart/5min?symbol=${ticker}&apikey=${key}`,
-          60000 // 1 minute cache
-        );
-        if (Array.isArray(fiveMinData) && fiveMinData.length > 0) {
-          data = decompose5MinTo1Min(fiveMinData);
-          isFallback = true;
-          console.log(`[FMP 1MIN FALLBACK] Successfully decomposed 5-min chart into 1-min candles for ${ticker}`);
-        }
-      } catch (fallbackErr: any) {
-        console.warn(`[FMP 5MIN CHART ERROR] Fallback failed for ${ticker}: ${fallbackErr.message}. Generating mock candles...`);
+      if (!Array.isArray(data) || data.length === 0) {
+        return res.status(404).json({ error: `No 1-minute chart data found for ${ticker}.` });
       }
-    }
 
-    // 3. Fallback to mock candle generation if both fetches failed
-    if (!Array.isArray(data) || data.length === 0) {
-      const currentPrice = await fetchCurrentPrice(ticker, key);
-      data = generateMock1MinCandles(ticker, currentPrice);
-      isFallback = true;
-      console.log(`[FMP 1MIN FALLBACK] Generated ${data.length} mock 1-min candles for ${ticker} at price $${currentPrice}`);
-    }
-
-    // 4. Double check EMA calculations against FMP's pre-calculated indicator (only if we did NOT fall back, to save API calls)
-    if (!isFallback) {
+      // Double check EMA calculations against FMP's pre-calculated indicator
       try {
-        if (Array.isArray(data) && data.length > 0) {
-          const chronological = [...data].reverse();
-          const localEmaValues = computeLocalEma(chronological, 9);
+        const chronological = [...data].reverse();
+        const localEmaValues = computeLocalEma(chronological, 9);
 
-          const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
-          const emaApiRes = await fetch(emaApiUrl);
-          if (emaApiRes.ok) {
-            const fmpEmaData = await emaApiRes.json();
-            if (Array.isArray(fmpEmaData)) {
-              const fmpEmaMap = new Map<string, number>();
-              fmpEmaData.forEach((item: any) => {
-                if (item.date && item.ema !== undefined && item.ema !== null) {
-                  fmpEmaMap.set(item.date, parseFloat(item.ema));
-                }
-              });
-
-              let totalChecks = 0;
-              let discrepanciesCount = 0;
-              chronological.forEach((candle: any, idx: number) => {
-                const localEmaVal = localEmaValues[idx];
-                const fmpEmaVal = fmpEmaMap.get(candle.date);
-                if (fmpEmaVal !== undefined && !isNaN(localEmaVal)) {
-                  totalChecks++;
-                  const diff = Math.abs(localEmaVal - fmpEmaVal);
-                  if (diff > 0.05) {
-                    discrepanciesCount++;
-                    console.warn(`[EMA CHECK WARNING] Discrepancy for ${ticker} at ${candle.date}: Computed = ${localEmaVal.toFixed(4)}, FMP = ${fmpEmaVal.toFixed(4)} (diff: ${diff.toFixed(4)})`);
-                  }
-                }
-              });
-              if (discrepanciesCount > 0) {
-                console.warn(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. Found ${discrepanciesCount} discrepancies exceeding 0.05 threshold.`);
-              } else {
-                console.log(`[EMA CHECK COMPLETED] ${ticker}: Checked ${totalChecks} candles. No discrepancies found.`);
+        const emaApiUrl = `https://financialmodelingprep.com/stable/technical-indicators/ema?symbol=${ticker}&periodLength=9&timeframe=1min&apikey=${key}`;
+        const fmpEmaData = await fmpClient.fetchWithCache<any[]>(emaApiUrl, 0);
+        if (Array.isArray(fmpEmaData)) {
+            const fmpEmaMap = new Map<string, number>();
+            fmpEmaData.forEach((item: any) => {
+              if (item.date && item.ema !== undefined && item.ema !== null) {
+                fmpEmaMap.set(item.date, parseFloat(item.ema));
               }
-            }
-          }
-        }
-      } catch (emaCheckError: any) {
-        console.warn(`EMA check verification failed for ${ticker}:`, emaCheckError.message);
-      }
-    }
+            });
 
-    res.json(data);
+            let totalChecks = 0;
+            let discrepanciesCount = 0;
+            chronological.forEach((candle: any, idx: number) => {
+              const localVal = localEmaValues[idx];
+              if (localVal === null) return;
+              const fmpVal = fmpEmaMap.get(candle.date);
+              if (fmpVal !== undefined && !isNaN(localVal)) {
+                totalChecks++;
+                const diff = Math.abs(localVal - fmpVal);
+                if (diff > 0.05) {
+                  discrepanciesCount++;
+                }
+              }
+            });
+            if (discrepanciesCount > 0) {
+              console.warn(`[EMA VALIDATION] Found ${discrepanciesCount} significant discrepancies against FMP EMA data out of ${totalChecks} checks for ${ticker}.`);
+            }
+        }
+      } catch (emaErr: any) {
+        console.warn(`[EMA VALIDATION ERROR] Could not validate EMA for ${ticker}: ${emaErr.message}`);
+      }
+
+      res.json(data);
+    } catch (err: any) {
+      console.error(`[FMP 1MIN CHART ERROR] Failed for ${req.params.ticker}: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/stock/:ticker/news", async (req, res) => {
     try {
       const key = getFmpKey();
       const ticker = req.params.ticker.toUpperCase();
-      const data = await fetchWithCache(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=20&apikey=${key}`, 300000); // 5m
+      const data = await fmpClient.fetchWithCache(`https://financialmodelingprep.com/stable/news/stock?symbols=${ticker}&limit=20&apikey=${key}`, 300000); // 5m
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -678,7 +508,7 @@ async function startServer() {
   app.get("/api/market/gainers", async (req, res) => {
     try {
       const key = getFmpKey();
-      const data = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`, 30000); // 30s
+      const data = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/biggest-gainers?apikey=${key}`, 30000); // 30s
 
       // Ensure changesPercentage is populated for frontend compatibility
       const mappedData = data.map((item: any) => ({
@@ -705,14 +535,14 @@ async function startServer() {
       const todayStr = `${year}-${month}-${day}`;
 
       // 1. Fetch global exchange market hours for NASDAQ
-      const hoursData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/exchange-market-hours?exchange=NASDAQ&apikey=${key}`, 300000); // 5m
+      const hoursData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/exchange-market-hours?exchange=NASDAQ&apikey=${key}`, 300000); // 5m
       const marketHours = Array.isArray(hoursData) && hoursData.length > 0 ? hoursData[0] : null;
 
       // 2. Fetch holiday calendar for today
       let isHoliday = false;
       let holidayName: string | null = null;
       try {
-        const holidaysData = await fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/holidays-by-exchange?exchange=NASDAQ&from=${todayStr}&to=${todayStr}&apikey=${key}`, 300000); // 5m
+        const holidaysData = await fmpClient.fetchWithCache<any[]>(`https://financialmodelingprep.com/stable/holidays-by-exchange?exchange=NASDAQ&from=${todayStr}&to=${todayStr}&apikey=${key}`, 300000); // 5m
         if (Array.isArray(holidaysData) && holidaysData.length > 0) {
           const holiday = holidaysData.find((h: any) => h.isClosed);
           if (holiday) {
@@ -751,6 +581,41 @@ async function startServer() {
     logUserDecision(userId, message, level);
     res.json({ success: true });
   });
+
+  // Check if log file exists for a user
+  app.get("/api/logs/exists", (req, res) => {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    // Prevent path traversal
+    if (userId.includes("..") || userId.includes("/") || userId.includes("\\")) {
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+    const logsDir = path.join(process.cwd(), "logs");
+    const logFilePath = path.join(logsDir, `${userId}.log`);
+    const exists = fs.existsSync(logFilePath);
+    res.json({ exists });
+  });
+
+  // Download log file for a user
+  app.get("/api/logs/download", (req, res) => {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    // Prevent path traversal
+    if (userId.includes("..") || userId.includes("/") || userId.includes("\\")) {
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+    const logsDir = path.join(process.cwd(), "logs");
+    const logFilePath = path.join(logsDir, `${userId}.log`);
+    if (!fs.existsSync(logFilePath)) {
+      return res.status(404).json({ error: "Log file not found" });
+    }
+    res.download(logFilePath, `${userId}.log`);
+  });
+
 
   // Brokerage API Proxies
   app.get("/api/broker/trades", async (req, res) => {

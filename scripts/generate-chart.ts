@@ -88,26 +88,78 @@ if (!fs.existsSync(publicDir)) {
 }
 
 // Fetch candles cache to avoid duplicate network requests for the same date
-const candlesCache = new Map<string, any[]>();
+const candlesCache = new Map<string, { candles: any[]; resolvedDate: string }>();
 
-async function getCachedCandles(symbol: string, date: string): Promise<any[]> {
-  if (candlesCache.has(date)) {
-    return candlesCache.get(date)!;
+/**
+ * Fetches 1-minute historical candles from the Financial Modeling Prep (FMP) API,
+ * caching the results by date to prevent duplicate network requests.
+ * 
+ * @param symbol - The stock ticker symbol.
+ * @param date - The date to fetch historical data for (in YYYY-MM-DD format).
+ * @returns A promise that resolves to an array of candle objects.
+ * @throws An error if the FMP API returns a non-OK status or invalid format.
+ */
+async function getCachedCandles(symbol: string, date: string): Promise<{ candles: any[]; resolvedDate: string }> {
+  const cacheKey = `${symbol}_${date}`;
+  if (candlesCache.has(cacheKey)) {
+    return candlesCache.get(cacheKey)!;
   }
+  
   const url = `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${symbol}&from=${date}&to=${date}&apikey=${FMP_API_KEY}`;
   console.log(`Fetching FMP intraday 1min candles for ${date}: ${url.replace(FMP_API_KEY!, 'SECRET')}`);
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`FMP API returned status ${response.status}`);
   }
-  const data = await response.json();
+  let data = await response.json();
+  let resolvedDate = date;
+
+  if (!Array.isArray(data) || data.length === 0) {
+    console.log(`No candles found for ${date}. Fetching latest available candles to auto-resolve correct trading date...`);
+    const fallbackUrl = `https://financialmodelingprep.com/stable/historical-chart/1min?symbol=${symbol}&apikey=${FMP_API_KEY}`;
+    const fbResponse = await fetch(fallbackUrl);
+    if (fbResponse.ok) {
+      const fbData = await fbResponse.json();
+      if (Array.isArray(fbData) && fbData.length > 0) {
+        const uniqueDates = Array.from(new Set(fbData.map((c: any) => c.date.split(' ')[0]))).sort();
+        const targetTime = new Date(date).getTime();
+        let bestDate = '';
+        for (const d of uniqueDates) {
+          if (new Date(d).getTime() <= targetTime) {
+            bestDate = d;
+          }
+        }
+        if (!bestDate && uniqueDates.length > 0) {
+          bestDate = uniqueDates[uniqueDates.length - 1];
+        }
+        if (bestDate && bestDate !== date) {
+          console.log(`Auto-resolved trading date for ${date} to: ${bestDate}`);
+          resolvedDate = bestDate;
+          const filteredData = fbData.filter((c: any) => c.date.startsWith(bestDate));
+          const result = { candles: filteredData, resolvedDate };
+          candlesCache.set(cacheKey, result);
+          candlesCache.set(`${symbol}_${resolvedDate}`, result);
+          return result;
+        }
+      }
+    }
+  }
+
   if (!Array.isArray(data)) {
     throw new Error(`Invalid FMP response: ${JSON.stringify(data)}`);
   }
-  candlesCache.set(date, data);
-  return data;
+  
+  const result = { candles: data, resolvedDate };
+  candlesCache.set(cacheKey, result);
+  return result;
 }
 
+/**
+ * Converts an FMP date string (assumed to be in EST/EDT) to a Unix timestamp.
+ * 
+ * @param fmpDate - The date string from the FMP API (e.g., "YYYY-MM-DD HH:MM:SS").
+ * @returns The corresponding Unix timestamp (seconds since epoch).
+ */
 function fmpDateToUnix(fmpDate: string): number {
   const dateStr = fmpDate.replace(' ', 'T');
   const temp = new Date(dateStr + '-04:00'); // Assume EDT
@@ -115,6 +167,52 @@ function fmpDateToUnix(fmpDate: string): number {
     return Math.floor(new Date(dateStr + '-05:00').getTime() / 1000);
   }
   return Math.floor(temp.getTime() / 1000);
+}
+
+/**
+ * Parses a date-time string (either Eastern Time format "YYYY-MM-DD HH:MM:SS" 
+ * or an ISO timestamp string) into a Unix timestamp in seconds.
+ * 
+ * @param timeStr - The date-time string to parse.
+ * @returns The corresponding Unix timestamp (seconds since epoch).
+ */
+function parseTimeToUnix(timeStr: string): number {
+  if (timeStr.includes('T')) {
+    // If it's a standard ISO string with timezone or without, parse it.
+    // If it's the execution timestamp from getEasternISOString, it has format YYYY-MM-DDTHH:MM:SS.ms (no timezone suffix)
+    // and is in Eastern Time.
+    if (!timeStr.endsWith('Z') && !timeStr.includes('+') && !timeStr.includes('-')) {
+      return fmpDateToUnix(timeStr.replace('T', ' '));
+    }
+    return Math.floor(new Date(timeStr).getTime() / 1000);
+  }
+  // Otherwise, assume it's in Eastern Time "YYYY-MM-DD HH:MM:SS"
+  return fmpDateToUnix(timeStr);
+}
+
+/**
+ * Formats a Unix timestamp (seconds) to Eastern Time format "YYYY-MM-DD HH:MM:SS".
+ * 
+ * @param unix - The Unix timestamp in seconds.
+ * @returns Eastern Time formatted string.
+ */
+function formatUnixToEastern(unix: number): string {
+  const date = new Date(unix * 1000);
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(date);
+  const partMap = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  let hour = partMap.hour;
+  if (hour === '24') hour = '00';
+  return `${partMap.year}-${partMap.month}-${partMap.day} ${hour}:${partMap.minute}:${partMap.second}`;
 }
 
 // Load and parse log file
@@ -197,7 +295,7 @@ const occurrences: {
 
 for (let i = 0; i < lines.length; i++) {
   const line = lines[i];
-  if (line.includes(`Buy Entrance Checklist for $${ticker}:`)) {
+  if (line.includes(`Buy Entrance Checklist for $${ticker} `) || line.includes(`Buy Entrance Checklist for $${ticker}:`)) {
     const checklistLines: string[] = [];
     let endIndex = -1;
     let timestamp = '';
@@ -243,32 +341,77 @@ if (filteredOccurrences.length === 0) {
 
 console.log(`Processing ${filteredOccurrences.length} matching occurrences...`);
 
+/**
+ * Processes a single checklist occurrence, fetching necessary candle data,
+ * calculating indicators like EMA-9 and bull flag breakouts, and writing
+ * the resulting interactive HTML chart file to the public directory.
+ * 
+ * @param occ - The log occurrence data including checklist lines and end index.
+ * @param index - The index of the occurrence in the list.
+ * @returns A promise that resolves when processing is complete.
+ */
 async function processOccurrence(occ: typeof occurrences[0], index: number) {
   const { timestamp, checklistLines, endIndex } = occ;
-  const dateStr = timestamp.substring(0, 10); // YYYY-MM-DD
-  const timeFormatted = timestamp.substring(11, 19).replace(/:/g, '-'); // HH-MM-SS
+  
+  // Parse exact evaluation time if present in the checklist header (e.g. "at 09:56:00:")
+  const firstLine = checklistLines[0];
+  const timeMatch = firstLine.match(/at (\d{2}:\d{2}:\d{2}):/);
+  const evalTime = timeMatch ? timeMatch[1] : '';
 
-  console.log(`\n[${index + 1}/${filteredOccurrences.length}] Processing JZXN evaluation at ${timestamp}...`);
+  let dateStr = timestamp.substring(0, 10); // YYYY-MM-DD
+  let timeFormatted = evalTime ? evalTime.replace(/:/g, '-') : timestamp.substring(11, 19).replace(/:/g, '-'); // HH-MM-SS
 
-  // Parse check-post decision (abort / fill)
-  let isAborted = false;
-  let decisionReason = '';
+  console.log(`\n[${index + 1}/${filteredOccurrences.length}] Processing ${ticker} evaluation at ${timestamp}...`);
+
+  // Parse check-post decision (abort / fill / trade results)
+  let checklistFailed = false;
+  checklistLines.forEach(line => {
+    if (line.includes('Result: ✗') || line.includes('FAILED ENTRANCE REQUIREMENTS')) {
+      checklistFailed = true;
+    }
+  });
+
+  let isAborted = checklistFailed;
+  let decisionReason = checklistFailed ? 'Failed checklist requirements.' : '';
+  let decisionSimTime = evalTime;
   let finalDecisionTime = timestamp;
 
   for (let idx = endIndex; idx < Math.min(endIndex + 15, lines.length); idx++) {
     const line = lines[idx];
+    const msgPart = line.substring(line.indexOf(']') + 1);
+    const simTimeMatch = msgPart.match(/(\d{2}:\d{2}:\d{2})/);
+
     if (line.includes(`[ABORT]`) && line.includes(`$${ticker}`)) {
       isAborted = true;
       decisionReason = line.substring(line.indexOf('[ABORT]'));
-      const tMatch = line.match(/^\[([^\]]+)\]/);
-      if (tMatch) finalDecisionTime = tMatch[1];
+      if (simTimeMatch) {
+        decisionSimTime = simTimeMatch[1];
+      } else {
+        const tMatch = line.match(/^\[([^\]]+)\]/);
+        if (tMatch) finalDecisionTime = tMatch[1];
+      }
       break;
     }
     if (line.includes(`BUY ORDER FILLED`) && line.includes(`$${ticker}`)) {
       isAborted = false;
       decisionReason = line.substring(line.indexOf('BUY ORDER FILLED'));
-      const tMatch = line.match(/^\[([^\]]+)\]/);
-      if (tMatch) finalDecisionTime = tMatch[1];
+      if (simTimeMatch) {
+        decisionSimTime = simTimeMatch[1];
+      } else {
+        const tMatch = line.match(/^\[([^\]]+)\]/);
+        if (tMatch) finalDecisionTime = tMatch[1];
+      }
+      break;
+    }
+    if (line.includes(`[TRADE]`) && line.includes(`$${ticker}`)) {
+      isAborted = false;
+      decisionReason = line.substring(line.indexOf('[TRADE]'));
+      if (simTimeMatch) {
+        decisionSimTime = simTimeMatch[1];
+      } else {
+        const tMatch = line.match(/^\[([^\]]+)\]/);
+        if (tMatch) finalDecisionTime = tMatch[1];
+      }
       break;
     }
   }
@@ -306,11 +449,23 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
     });
   }
 
-  // Get raw candles (from FMP)
-  const rawCandles = await getCachedCandles(ticker, dateStr);
+  // Get raw candles (from FMP) and resolved date
+  const { candles: rawCandles, resolvedDate } = await getCachedCandles(ticker, dateStr);
   if (rawCandles.length === 0) {
-    console.error(`  Warning: No candles found for ${dateStr}, skipping.`);
+    console.error(`  Warning: No candles found for ${resolvedDate}, skipping.`);
     return;
+  }
+  dateStr = resolvedDate;
+
+  // Align decision time with resolved date
+  if (decisionSimTime) {
+    finalDecisionTime = `${dateStr} ${decisionSimTime}`;
+  } else if (finalDecisionTime === timestamp) {
+    const dateObj = new Date(timestamp.includes('Z') || timestamp.includes('+') ? timestamp : timestamp + 'Z');
+    const estDateStr = dateObj.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+    const [month, day, year] = estDateStr.split('/');
+    const timeFormattedEst = timestamp.substring(11, 19);
+    finalDecisionTime = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${timeFormattedEst}`;
   }
 
   // Sort candles chronologically
@@ -339,7 +494,12 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
   }));
 
   // Detect pattern at the moment of checklist
-  const checklistUnix = Math.floor(new Date(timestamp).getTime() / 1000);
+  let checklistUnix: number;
+  if (evalTime && dateStr) {
+    checklistUnix = parseTimeToUnix(`${dateStr} ${evalTime}`);
+  } else {
+    checklistUnix = parseTimeToUnix(timestamp);
+  }
   const candlesUpToDecision = chronologicalCandles.filter(c => fmpDateToUnix(c.date) <= checklistUnix);
   const patternResult = detectBullFlag(candlesUpToDecision.length > 0 ? candlesUpToDecision : chronologicalCandles);
 
@@ -363,7 +523,7 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
   // Align decisionUnix with nearest candle
   let markerTime = 0;
   let closestDiff = Infinity;
-  const finalDecisionUnix = Math.floor(new Date(finalDecisionTime).getTime() / 1000);
+  const finalDecisionUnix = parseTimeToUnix(finalDecisionTime);
 
   chartCandleData.forEach(c => {
     const candleMin = Math.floor(c.time / 60);
@@ -397,13 +557,15 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
     checklist: checklistLines
   };
 
+  const formattedChecklistTime = formatUnixToEastern(checklistUnix);
+
   // Compile HTML output
   const htmlContent = `<!DOCTYPE html>
 <html lang="en" class="h-screen">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Momentum Algo Decision Chart - $${ticker} (${timestamp})</title>
+  <title>Momentum Algo Decision Chart - $${ticker} (${formattedChecklistTime})</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js" onerror="console.warn('unpkg failed, trying jsdelivr'); this.onerror=null; this.src='https://cdn.jsdelivr.net/npm/lightweight-charts@4/dist/lightweight-charts.standalone.production.js';"></script>
   <!-- Error Console Logger -->
@@ -463,7 +625,7 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
       <div class="h-8 w-[1px] bg-[#2a2e39]"></div>
       <div class="text-right">
         <span class="text-xs text-gray-500 block uppercase font-semibold tracking-wider">Evaluation Timestamp</span>
-        <span class="text-sm font-bold text-gray-200 font-mono">${timestamp}</span>
+        <span class="text-sm font-bold text-gray-200 font-mono">${formattedChecklistTime}</span>
       </div>
       <div class="h-8 w-[1px] bg-[#2a2e39]"></div>
       <div>
@@ -559,10 +721,32 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
       rightPriceScale: {
         borderColor: '#2a2e39',
       },
+      localization: {
+        timeFormatter: (timestamp) => {
+          const date = new Date(timestamp * 1000);
+          return date.toLocaleDateString('en-US', { timeZone: 'America/New_York' }) + ' ' + 
+                 date.toLocaleTimeString('en-US', {
+                   timeZone: 'America/New_York',
+                   hour: '2-digit',
+                   minute: '2-digit',
+                   second: '2-digit',
+                   hour12: false
+                 });
+        }
+      },
       timeScale: {
         borderColor: '#2a2e39',
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (time, tickMarkType, locale) => {
+          const date = new Date(time * 1000);
+          return date.toLocaleTimeString('en-US', {
+            timeZone: 'America/New_York',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          });
+        }
       },
     });
 
@@ -646,6 +830,12 @@ async function processOccurrence(occ: typeof occurrences[0], index: number) {
   console.log(`  -> URL: http://localhost:3000/${outputFilename}`);
 }
 
+/**
+ * Main execution entry point. Iterates through all filtered checklist
+ * occurrences in the log and processes each one sequentially.
+ * 
+ * @returns A promise that resolves when the batch run completes.
+ */
 async function run() {
   try {
     for (let i = 0; i < filteredOccurrences.length; i++) {

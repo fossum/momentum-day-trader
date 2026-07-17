@@ -639,5 +639,54 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
   }
 }
 
+// 14. Test case: Tight stop distance ($0.04 stop distance) accepted under new default limit
+{
+  const candles = createBaseCandles(10, 10);
+  
+  // Flagpole
+  candles.push({
+    date: '2026-07-10T09:40:00-04:00',
+    open: 10.0,
+    high: 10.5,
+    low: 9.9,
+    close: 10.4,
+    volume: 10000
+  });
+  candles.push({
+    date: '2026-07-10T09:41:00-04:00',
+    open: 10.4,
+    high: 11.2,
+    low: 10.3,
+    close: 11.0,
+    volume: 15000
+  });
+
+  // Pullback: low at 11.16 (stop distance $0.04 from resistance 11.2)
+  candles.push({
+    date: '2026-07-10T09:42:00-04:00',
+    open: 11.20,
+    high: 11.20,
+    low: 11.16,
+    close: 11.18,
+    volume: 3000
+  });
+  candles.push({
+    date: '2026-07-10T09:43:00-04:00',
+    open: 11.18,
+    high: 11.18,
+    low: 11.16, // pullback low
+    close: 11.17,
+    volume: 2000
+  });
+
+  // Call with default minStopDistance (should be 0.01 now)
+  const result = analyzeBullFlag(candles, undefined, 6.0, 1, 1);
+  if (result.detected) {
+    console.log("✅ Case 14: Tight stop ($0.04) accepted under default minimum guardrail passed.");
+  } else {
+    console.error("❌ Case 14: Tight stop ($0.04) rejected under default minimum guardrail failure.", result);
+  }
+}
+
 console.log("==================================================");
 

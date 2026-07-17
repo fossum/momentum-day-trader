@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { auth, db } from '../lib/firebase';
+import { auth, db, DEFAULT_USER_ID } from '../lib/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { UserPreferences } from '../types';
@@ -254,6 +254,7 @@ export function Dashboard() {
             </button>
             <button
               onClick={() => auth.signOut()}
+              title={`User: ${auth.currentUser?.email || auth.currentUser?.uid || `${DEFAULT_USER_ID} (Bypassed)`}`}
               className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-100 focus:outline-none"
             >
               <LogOut className="h-4 w-4" />
