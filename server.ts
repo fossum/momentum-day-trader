@@ -1,4 +1,11 @@
+/**
+ * @file server.ts
+ * @description Main Express application server for the AI Studio Trader dashboard.
+ * Sets up middleware, API proxies, static file serving, and Vite development server integrations.
+ */
+
 import express from "express";
+import http from "http";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
@@ -9,7 +16,11 @@ import { FmpApiClient } from "./fmp_client";
 
 dotenv.config();
 
-// Helper to get Eastern ISO string format
+/**
+ * Formats a Date object into an ISO 8601 string representing Eastern Standard Time (EST/EDT).
+ * @param {Date} [date=new Date()] - The date to format.
+ * @returns {string} The formatted ISO string in Eastern Time.
+ */
 function getEasternISOString(date: Date = new Date()): string {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
@@ -40,7 +51,14 @@ function getEasternISOString(date: Date = new Date()): string {
   return `${partMap.year}-${partMap.month}-${partMap.day}T${hour}:${partMap.minute}:${partMap.second}.${ms}${offset}`;
 }
 
-// Local logging helper for user decisions
+/**
+ * Logs user actions and trade decisions to a local file for diagnostic purposes.
+ * Validates the user ID to prevent path traversal vulnerabilities.
+ * @param {string | undefined} userId - The unique identifier of the user.
+ * @param {string} message - The message to write to the log.
+ * @param {string} [level="INFO"] - The severity level of the log message.
+ * @returns {void}
+ */
 function logUserDecision(userId: string | undefined, message: string, level: string = "INFO") {
   if (!userId) return;
 
@@ -66,9 +84,12 @@ function logUserDecision(userId: string | undefined, message: string, level: str
 
 let fmpClient: FmpApiClient;
 
-
-
-// Helper to fetch live quote price
+/**
+ * Fetches the current price of a stock symbol using the Financial Modeling Prep (FMP) API.
+ * @param {string} ticker - The stock ticker symbol.
+ * @param {string} key - The Financial Modeling Prep API key.
+ * @returns {Promise<number>} Resolves to the current stock price, defaulting to 10.0 on error.
+ */
 async function fetchCurrentPrice(ticker: string, key: string): Promise<number> {
   try {
     const data = await fmpClient.fetchWithCache<any[]>(
@@ -84,7 +105,12 @@ async function fetchCurrentPrice(ticker: string, key: string): Promise<number> {
   return 10.0;
 }
 
-// Helper to calculate EMA from a chronological list of candles
+/**
+ * Calculates the Exponential Moving Average (EMA) for a list of stock candles.
+ * @param {any[]} candles - The chronological list of candle data objects.
+ * @param {number} [period=9] - The EMA period.
+ * @returns {number[]} An array containing the calculated EMA values corresponding to each candle.
+ */
 function computeLocalEma(candles: any[], period: number = 9): number[] {
   if (candles.length < period) {
     const sum = candles.reduce((acc, c) => acc + (parseFloat(c.close) || 0), 0);
@@ -113,6 +139,11 @@ function computeLocalEma(candles: any[], period: number = 9): number[] {
   return emaValues;
 }
 
+/**
+ * Starts the HTTP server and initializes all middleware, database collections, and routes.
+ * In development mode, configures and mounts Vite as a middleware.
+ * @returns {Promise<void>} Resolves when the server is fully started.
+ */
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -121,6 +152,12 @@ async function startServer() {
   app.use(express.json());
 
   // FMP API Proxy
+  /**
+   * Retrieves the Financial Modeling Prep (FMP) API key from the environment.
+   * Throws an error if the key is not set.
+   * @returns {string} The FMP API key.
+   * @throws {Error} If FMP_API_KEY is not defined in the environment.
+   */
   const getFmpKey = () => {
     const key = process.env.FMP_API_KEY;
     if (!key) {
@@ -1177,10 +1214,17 @@ async function startServer() {
     }
   });
 
+  const httpServer = http.createServer(app);
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: {
+          server: httpServer,
+        },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -1193,7 +1237,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
