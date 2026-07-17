@@ -1,3 +1,9 @@
+/**
+ * @file types.ts
+ * @description Type definitions for the AI Studio Trader application,
+ * representing trades, market indicators, preferences, and simulation states.
+ */
+
 export interface Trade {
   id: string;
   userId: string;
@@ -87,6 +93,10 @@ export interface UserPreferences {
   simulationSpeed?: number;
   maxFlagpoleRedCandles?: number;
   maxPullbackGreenCandles?: number;
+  /**
+   * The current active simulated trade state, saved to the database.
+   */
+  currentTrade?: SimulatedTrade | null;
 }
 
 export interface LowFloatTicker {

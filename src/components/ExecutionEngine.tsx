@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { auth, db, getCachedSentiment, cacheSentiment } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import { UserPreferences, LogMessage, SimulatedTrade, MarketGainer } from '../types';
@@ -171,39 +171,42 @@ export function ExecutionEngine({
     setBlacklistedInput((preferences.blacklistedTickers || []).join(', '));
   }, [preferences.blacklistedTickers]);
 
+  const hasResumedRef = useRef<boolean>(false);
+
   useEffect(() => {
     if (!auth.currentUser) return;
+    if (hasResumedRef.current) return;
 
-    const loadState = async () => {
-      try {
-        const docRef = doc(db, `users/${auth.currentUser?.uid}/executionState`, 'currentTrade');
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists() && !docSnap.data().empty) {
-          const trade = docSnap.data() as SimulatedTrade;
-          currentTradeRef.current = trade;
-          setCurrentTrade(trade);
-          changeStep(4); // Resume at position tracking
-        }
-      } catch (e) {
-        console.warn('Failed to load active trade', e);
+    if (preferences.currentTrade) {
+      const trade = preferences.currentTrade;
+      if (trade && !('empty' in trade)) {
+        currentTradeRef.current = trade;
+        setCurrentTrade(trade);
+        changeStep(4); // Resume at position tracking
       }
-    };
-    loadState();
-  }, []);
+      hasResumedRef.current = true;
+    }
+  }, [preferences.currentTrade]);
 
-  const updateCurrentTrade = async (trade: SimulatedTrade | null) => {
+  /**
+   * Updates the current active simulated trade state in local state and refs,
+   * and persists it to the user's settings document in Firestore.
+   *
+   * @param trade - The active simulated trade state to save, or null to clear it.
+   * @returns A promise that resolves when the trade state is successfully persisted.
+   */
+  const updateCurrentTrade = async (trade: SimulatedTrade | null): Promise<void> => {
     currentTradeRef.current = trade;
     setCurrentTrade(trade);
     if (auth.currentUser) {
       try {
-        const docRef = doc(db, `users/${auth.currentUser.uid}/executionState`, 'currentTrade');
-        if (trade) {
-          await setDoc(docRef, trade);
-        } else {
-          await setDoc(docRef, { empty: true });
-        }
+        const updatedPrefs = {
+          ...preferencesRef.current,
+          currentTrade: trade ? trade : ({ empty: true } as any)
+        };
+        await onSavePreferences(updatedPrefs);
       } catch (e) {
-        console.warn('Failed to save active trade to DB', e);
+        console.warn('Failed to save active trade to preferences', e);
       }
     }
   };
@@ -524,22 +527,28 @@ export function ExecutionEngine({
 
               const sortedCandles = Array.isArray(candles) ? [...candles].reverse() : [];
 
-              const checkSentimentCallback = async (ticker: string, catalystText: string) => {
-                const cached = await getCachedSentiment(ticker, catalystText);
-                if (cached) {
-                  return { isPositive: cached.isPositive, reason: cached.reason + " (Cached)" };
-                }
+              /**
+               * Queries the backend API to determine news sentiment,
+               * fetching a new analysis or returning a server-cached result.
+               * Includes the client's Firebase ID token for secure authorization.
+               *
+               * @param ticker - The stock ticker symbol.
+               * @param catalystText - The news headline text.
+               * @returns A promise resolving to the sentiment classification and explanation.
+               * @throws An error if the sentiment API request fails.
+               */
+              const checkSentimentCallback = async (ticker: string, catalystText: string): Promise<{ isPositive: boolean; reason: string }> => {
+                const idToken = await auth.currentUser?.getIdToken();
                 const res = await fetch('/api/news/sentiment', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                  },
                   body: JSON.stringify({ ticker, headline: catalystText })
                 });
                 if (res.ok) {
                   const data = await res.json();
-                  await cacheSentiment(ticker, catalystText, {
-                    isPositive: data.isPositive,
-                    reason: data.reason
-                  });
                   return { isPositive: data.isPositive, reason: data.reason };
                 } else if (res.status === 500) {
                   return { isPositive: true, reason: "Technical Breakout Only (500 Error)" };
@@ -680,53 +689,38 @@ export function ExecutionEngine({
                 if (hasActualNews) {
                   addLog(`[GEMINI] Analyzing news catalyst sentiment for $${activeTrade.ticker}...`, 'info', activeTrade.ticker);
                   try {
-                    const cached = await getCachedSentiment(activeTrade.ticker, activeTrade.catalyst);
-                    if (cached) {
-                      if (!cached.isPositive) {
-                        addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker} (Cached). Reason: "${cached.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
-                        await updateCurrentTrade(null);
-                        changeStep(0);
-                        return;
-                      }
-                      addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker} (Cached): "${cached.reason}"`, 'success', activeTrade.ticker);
-                    } else {
-                      const res = await fetch('/api/news/sentiment', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          ticker: activeTrade.ticker,
-                          headline: activeTrade.catalyst
-                        })
-                      });
-                      if (!res.ok) {
-                        if (res.status === 500) {
-                          addLog(`[GEMINI ERROR] Sentiment API returned status 500. Flagging $${activeTrade.ticker} as Technical Breakout Only.`, 'warn', activeTrade.ticker);
-                          await updateCurrentTrade({
-                            ...activeTrade,
-                            setup: 'Technical Breakout Only'
-                          });
-                          changeStep(2);
-                          return;
-                        }
-                        throw new Error(`Server returned status ${res.status}`);
-                      }
-                      const data = await res.json();
-                      if (!data.isPositive) {
-                        addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
-                        await cacheSentiment(activeTrade.ticker, activeTrade.catalyst, {
-                          isPositive: false,
-                          reason: data.reason
+                    const idToken = await auth.currentUser?.getIdToken();
+                    const res = await fetch('/api/news/sentiment', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${idToken}`
+                      },
+                      body: JSON.stringify({
+                        ticker: activeTrade.ticker,
+                        headline: activeTrade.catalyst
+                      })
+                    });
+                    if (!res.ok) {
+                      if (res.status === 500) {
+                        addLog(`[GEMINI ERROR] Sentiment API returned status 500. Flagging $${activeTrade.ticker} as Technical Breakout Only.`, 'warn', activeTrade.ticker);
+                        await updateCurrentTrade({
+                          ...activeTrade,
+                          setup: 'Technical Breakout Only'
                         });
-                        await updateCurrentTrade(null);
-                        changeStep(0);
+                        changeStep(2);
                         return;
                       }
-                      addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
-                      await cacheSentiment(activeTrade.ticker, activeTrade.catalyst, {
-                        isPositive: true,
-                        reason: data.reason
-                      });
+                      throw new Error(`Server returned status ${res.status}`);
                     }
+                    const data = await res.json();
+                    if (!data.isPositive) {
+                      addLog(`[ABORT] Gemini determined news is not a positive fundamental catalyst for $${activeTrade.ticker}. Reason: "${data.reason}". Headline: "${activeTrade.catalyst}". Skipping trade.`, 'warn', activeTrade.ticker);
+                      await updateCurrentTrade(null);
+                      changeStep(0);
+                      return;
+                    }
+                    addLog(`[GEMINI] ✓ Positive news sentiment/catalyst confirmed for $${activeTrade.ticker}: "${data.reason}"`, 'success', activeTrade.ticker);
                   } catch (err: any) {
                     if (err.message?.includes("500")) {
                       addLog(`[GEMINI ERROR] Sentiment check failed: ${err.message}. Flagging $${activeTrade.ticker} as Technical Breakout Only.`, 'warn', activeTrade.ticker);

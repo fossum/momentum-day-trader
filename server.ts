@@ -13,6 +13,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import { analyzeNewsSentiment } from "./src/lib/gemini";
 import { FmpApiClient } from "./fmp_client";
+import { adminDb, adminAuth } from "./src/lib/firebaseAdmin";
 
 dotenv.config();
 
@@ -524,6 +525,19 @@ async function startServer() {
 
   app.post("/api/news/sentiment", async (req, res) => {
     try {
+      // 1. Authenticate Request via Firebase ID Token
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Unauthorized: Missing authorization header." });
+      }
+      const idToken = authHeader.substring(7);
+      try {
+        await adminAuth.verifyIdToken(idToken);
+      } catch (authErr: any) {
+        return res.status(401).json({ error: `Unauthorized: Invalid token. ${authErr.message}` });
+      }
+
+      // 2. Validate Request Parameters
       const { ticker, headline } = req.body;
       if (!ticker || !headline) {
         return res.status(400).json({ error: "Ticker and headline are required" });
@@ -534,7 +548,52 @@ async function startServer() {
         return res.status(503).json({ error: "GEMINI_API_KEY is not configured", code: "API_KEY_MISSING" });
       }
 
+      // 3. Compute Hashes (SHA-256 and FNV-1a) to look up in Firestore Cache
+      const normalized = headline.trim().toLowerCase();
+      const shaHash = crypto.createHash("sha256").update(normalized).digest("hex");
+
+      let fnvVal = 2166136261;
+      for (let i = 0; i < normalized.length; i++) {
+        fnvVal ^= normalized.charCodeAt(i);
+        fnvVal = Math.imul(fnvVal, 16777619);
+      }
+      const fnvHash = (fnvVal >>> 0).toString(16).padStart(8, '0');
+
+      try {
+        let cachedDoc = await adminDb.collection('newsSentiment').doc(shaHash).get();
+        if (!cachedDoc.exists) {
+          cachedDoc = await adminDb.collection('newsSentiment').doc(fnvHash).get();
+        }
+
+        if (cachedDoc.exists) {
+          const data = cachedDoc.data();
+          if (data && typeof data.isPositive === 'boolean') {
+            return res.json({
+              isPositive: data.isPositive,
+              reason: data.reason || 'Cached.'
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[WARNING] Failed to query Firestore sentiment cache on server: ${err.message}`);
+      }
+
+      // 4. Cache Miss: Perform live Gemini API call
       const result = await analyzeNewsSentiment(ticker, headline);
+
+      // 5. Save to persistent Firestore cache under SHA-256 hash using Admin SDK
+      try {
+        await adminDb.collection('newsSentiment').doc(shaHash).set({
+          ticker,
+          headline,
+          isPositive: result.isPositive,
+          reason: result.reason,
+          timestamp: new Date()
+        });
+      } catch (err: any) {
+        console.warn(`[WARNING] Failed to write to Firestore sentiment cache on server: ${err.message}`);
+      }
+
       res.json(result);
     } catch (error: any) {
       console.error(`Gemini sentiment check failed for ${req.body.ticker || "unknown"}:`, error.message);
