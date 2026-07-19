@@ -1,6 +1,3 @@
-import { Candle, BullFlagResult, BullFlagDiagnostic } from './types';
-import { calculate9EMA } from './ema';
-
 /**
  * Detect a Ross Cameron-style Bull Flag pattern from 1-minute candles.
  *
@@ -14,6 +11,16 @@ import { calculate9EMA } from './ema';
  *
  * Candles must be in chronological order (oldest first).
  * Analyzes the most recent candles to find the latest pattern.
+ */
+import { Candle, BullFlagResult, BullFlagDiagnostic } from './types';
+import { calculate9EMA } from './ema';
+
+
+/**
+ * Extracts the date portion of a date string in format YYYY-MM-DD.
+ *
+ * @param dateStr - The input date string.
+ * @returns The date string part, or an empty string if undefined.
  */
 function getDatePart(dateStr?: string): string {
   if (!dateStr) return '';
@@ -30,6 +37,12 @@ function getDatePart(dateStr?: string): string {
   return dateStr;
 }
 
+/**
+ * Checks if a candle is a micro-red candle or a doji.
+ *
+ * @param c - The candle to inspect.
+ * @returns True if the candle is micro-red or doji, false otherwise.
+ */
 function isMicroRedOrDoji(c: Candle): boolean {
   if (c.close > c.open) return false;
   const body = c.open - c.close;
@@ -38,6 +51,12 @@ function isMicroRedOrDoji(c: Candle): boolean {
   return body <= 0.02 || relativeBody <= 0.002;
 }
 
+/**
+ * Checks if a candle is a micro-green candle or a doji.
+ *
+ * @param c - The candle to inspect.
+ * @returns True if the candle is micro-green or doji, false otherwise.
+ */
 function isMicroGreenOrDoji(c: Candle): boolean {
   if (c.close <= c.open + 0.005) return true; // Standard red/doji is already conforming
   const body = c.close - c.open;
@@ -49,6 +68,11 @@ function isMicroGreenOrDoji(c: Candle): boolean {
 /**
  * Find the next resistance level from the candles list before the flagpole start.
  * Scans for local peaks above the entry price.
+ *
+ * @param candles - Array of chronological 1-minute Candle objects.
+ * @param flagpoleStartIdx - The index in the candles array where the flagpole starts.
+ * @param entryPrice - The entry price to scan above.
+ * @returns The closest next resistance level above entry price, or undefined if none.
  */
 export function findNextResistance(
   candles: Candle[],
@@ -59,7 +83,7 @@ export function findNextResistance(
   if (priorCandles.length === 0) return undefined;
 
   const peaks: number[] = [];
-  
+
   // Find local peaks in prior candles (maximum of 3-candle window)
   for (let i = 1; i < priorCandles.length - 1; i++) {
     const cur = priorCandles[i].high;
@@ -84,6 +108,28 @@ export function findNextResistance(
   return Math.min(...validTargets);
 }
 
+/**
+ * Detect a Ross Cameron-style Bull Flag pattern from 1-minute candles.
+ *
+ * Phase A (Flagpole): 2–3 consecutive green candles making new highs
+ * with aggressive volume acceleration. Allows up to maxFlagpoleRedCandles micro-red candles.
+ *
+ * Phase B (Pullback): 2–4 subsequent red/doji candles where:
+ *   - Average pullback volume < 50% of average flagpole volume
+ *   - Price holds above the 9 EMA
+ *   - Allows up to maxPullbackGreenCandles micro-green candles.
+ *
+ * Candles must be in chronological order (oldest first).
+ * Analyzes the most recent candles to find the latest pattern.
+ *
+ * @param candles - Array of chronological 1-minute Candle objects.
+ * @param currentPrice - Optional current price to override the last candle close.
+ * @param maxProximityPercent - Maximum percent distance from resistance level (default 2.0).
+ * @param maxFlagpoleRedCandles - Maximum allowed red candles in flagpole (default 1).
+ * @param maxPullbackGreenCandles - Maximum allowed green candles in pullback (default 1).
+ * @param minStopDistance - Minimum stop-loss guardrail distance (default 0.01).
+ * @returns The bull flag pattern details if detected, or null if not detected.
+ */
 export function detectBullFlag(
   candles: Candle[],
   currentPrice?: number,
@@ -168,6 +214,11 @@ export function detectBullFlag(
         const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
         const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
 
+        // Ensure Resistance > Pullback Low (invalid pattern if pullback low doesn't drop below resistance)
+        if (resistanceLevel <= pullbackLow) {
+          continue;
+        }
+
         // Reject negative, zero, or too small stops
         if (resistanceLevel - pullbackLow < minStopDistance) {
           continue;
@@ -201,6 +252,14 @@ export function detectBullFlag(
  * Detailed diagnostic check for a bull flag pattern.
  * If detected, returns the pattern setup details.
  * If not detected, evaluates the most recent candidate setups to explain why it failed.
+ *
+ * @param candles - Array of chronological 1-minute Candle objects.
+ * @param currentPrice - Optional current price to override the last candle close.
+ * @param maxProximityPercent - Maximum percent distance from resistance level (default 2.0).
+ * @param maxFlagpoleRedCandles - Maximum allowed red candles in flagpole (default 1).
+ * @param maxPullbackGreenCandles - Maximum allowed green candles in pullback (default 1).
+ * @param minStopDistance - Minimum stop-loss guardrail distance (default 0.01).
+ * @returns Diagnostic results indicating whether the pattern was detected, and if not, the failure reason.
  */
 export function analyzeBullFlag(
   candles: Candle[],
@@ -307,14 +366,18 @@ export function analyzeBullFlag(
               } else {
                 const resistanceLevel = Math.max(...flagpoleCandles.map(c => c.high));
                 const pullbackLow = Math.min(...pullbackCandles.map(c => c.low));
-                const stopDist = resistanceLevel - pullbackLow;
-                if (stopDist < minStopDistance) {
-                  failureReason = `Stop distance ($${stopDist.toFixed(2)}) is less than minimum stop-loss guardrail ($${minStopDistance.toFixed(2)})`;
+                if (resistanceLevel <= pullbackLow) {
+                  failureReason = `Invalid pattern: pullback low ($${pullbackLow.toFixed(2)}) is higher than or equal to resistance level ($${resistanceLevel.toFixed(2)})`;
                 } else {
-                  const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
-                  const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
-                  if (pctDiff > (maxProximityPercent / 100)) {
-                    failureReason = `Proximity check failed: price $${priceToCheck.toFixed(2)} is ${(pctDiff * 100).toFixed(2)}% away from resistance $${resistanceLevel.toFixed(2)} (max ${maxProximityPercent.toFixed(1)}%)`;
+                  const stopDist = resistanceLevel - pullbackLow;
+                  if (stopDist < minStopDistance) {
+                    failureReason = `Stop distance ($${stopDist.toFixed(2)}) is less than minimum stop-loss guardrail ($${minStopDistance.toFixed(2)})`;
+                  } else {
+                    const priceToCheck = currentPrice !== undefined ? currentPrice : candles[candles.length - 1].close;
+                    const pctDiff = Math.abs(priceToCheck - resistanceLevel) / resistanceLevel;
+                    if (pctDiff > (maxProximityPercent / 100)) {
+                      failureReason = `Proximity check failed: price $${priceToCheck.toFixed(2)} is ${(pctDiff * 100).toFixed(2)}% away from resistance $${resistanceLevel.toFixed(2)} (max ${maxProximityPercent.toFixed(1)}%)`;
+                    }
                   }
                 }
               }

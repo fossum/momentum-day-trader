@@ -1,3 +1,9 @@
+/**
+ * @fileoverview React component for the live trading execution engine.
+ * Integrates stock scanning, trade evaluation checklist execution,
+ * order placement via brokerage hooks, real-time logging, and preference updates.
+ */
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
@@ -22,18 +28,38 @@ import { FilterSettings } from './execution/FilterSettings';
 import { TerminalDisplay } from './execution/TerminalDisplay';
 import { Info } from 'lucide-react';
 
+/**
+ * Properties for the ExecutionEngine component.
+ */
 interface ExecutionEngineProps {
+  /** Callback fired when a ticker symbol is selected in the UI. */
   onSelectTicker?: (ticker: string) => void;
+  /** Custom React node to render the top gainers table or section. */
   topGainersSection?: React.ReactNode;
+  /** Custom React node containing helper text or documentation. */
   helperTextSection?: React.ReactNode;
+  /** Currently loaded user strategy and trade settings. */
   preferences: UserPreferences;
+  /** Callback to persist updated user preferences. */
   onSavePreferences: (newPrefs: UserPreferences) => Promise<void>;
+  /** External trigger numeric code to force a reconnection attempt. */
   retryTrigger?: number;
+  /** Callback invoked to request a connection retry. */
   onRetryConnection?: () => void;
+  /** Array of current top market gainers retrieved from FMP. */
   gainers?: MarketGainer[];
+  /** Callback to refresh the market gainers data. */
   onRefreshGainers?: () => Promise<void>;
 }
 
+/**
+ * ExecutionEngine component that manages the automated scanner polling,
+ * trade setup checklist validation, position entry/exit execution,
+ * and displays simulated trades and logs.
+ *
+ * @param props - The component properties.
+ * @returns The rendered execution engine dashboard interface.
+ */
 export function ExecutionEngine({
   onSelectTicker,
   topGainersSection,
@@ -422,7 +448,7 @@ export function ExecutionEngine({
               const minGainPercent = preferencesRef.current.minGainPercent ?? 10.0;
               let minRvol = preferencesRef.current.minRvol ?? 5.0;
               if (isAfterLunchtimeLull()) {
-                minRvol = Math.max(minRvol, 20.0);
+                minRvol = Math.max(minRvol, 10.0);
               }
               const maxFloatMillions = preferencesRef.current.maxFloatMillions ?? 20;
 

@@ -514,10 +514,10 @@ function createBaseCandles(count: number, basePrice: number): Candle[] {
   });
 
   const result = analyzeBullFlag(candles, undefined, 6.0, 1, 1, 0.05);
-  if (!result.detected && result.reason?.includes("Stop distance") && result.reason?.includes("less than minimum stop-loss")) {
-    console.log("✅ Case 11: Pullback low above resistance (backward stop) rejected & diagnosed passed.");
+  if (!result.detected && result.reason?.includes("Invalid pattern") && result.reason?.includes("higher than or equal to resistance level")) {
+    console.log("✅ Case 11: Pullback low above resistance (invalid pattern) rejected & diagnosed passed.");
   } else {
-    console.error("❌ Case 11: Pullback low above resistance (backward stop) failure.", result);
+    console.error("❌ Case 11: Pullback low above resistance (invalid pattern) failure.", result);
   }
 }
 

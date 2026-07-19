@@ -83,10 +83,10 @@ export async function evaluateSetup(params: {
   // 2. Daily Gain Check
   const passesGain = !checkDailyGain || (changePercent >= minGainPercent);
 
-  // 3. Relative Volume Check (enforcing 20x during lunchtime lull)
+  // 3. Relative Volume Check (enforcing 10x during lunchtime lull)
   let minRvol = preferences.minRvol ?? 5.0;
   if (isAfterLunchtimeLullAt(time)) {
-    minRvol = Math.max(minRvol, 20.0);
+    minRvol = Math.max(minRvol, 10.0);
   }
   // Time-scaled relative volume calculation (volume / (avgVolume / 390 * elapsedMarketMinutes))
   const elapsedMinutes = getElapsedMarketMinutes(time);
