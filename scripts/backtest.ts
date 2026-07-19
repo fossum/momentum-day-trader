@@ -2,6 +2,20 @@
  * @fileoverview Momentum trading strategy backtest runner.
  * Simulates chronological market candle data, evaluates gapper setups,
  * tracks simulated positions, and logs strategy metrics with Gemini news sentiment analysis caching.
+ *
+ * Usage:
+ *   npx tsx scripts/backtest.ts [options] [userId]
+ *   npm run backtest -- [options] [userId]
+ *
+ * Options:
+ *   --date=YYYY-MM-DD   Specify a custom past date to run the backtest for (defaults to the latest trading day in the candle chart).
+ *   --verbose           Print verbose checklist evaluations for candidate setups.
+ *
+ * Arguments:
+ *   userId              The user ID to load preferences for (defaults to 'testuser').
+ *
+ * Example:
+ *   npm run backtest -- --date=2026-07-16 --verbose ericfoss
  */
 
 import dotenv from 'dotenv';
@@ -74,7 +88,26 @@ const getEasternISOString = (date: Date = new Date()): string => {
 async function main() {
   const args = process.argv.slice(2);
   const isVerbose = args.includes('--verbose');
-  const userIdArg = args.find(a => !a.startsWith('--'));
+
+  // Parse target date if specified via --date=YYYY-MM-DD or --date YYYY-MM-DD
+  let targetDate: string | null = null;
+  const dateEqIdx = args.findIndex(a => a.startsWith('--date='));
+  if (dateEqIdx !== -1) {
+    targetDate = args[dateEqIdx].split('=')[1];
+  } else {
+    const dateIdx = args.indexOf('--date');
+    if (dateIdx !== -1 && dateIdx + 1 < args.length) {
+      targetDate = args[dateIdx + 1];
+    }
+  }
+
+  if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+    console.error("Error: --date parameter must be in YYYY-MM-DD format.");
+    process.exit(1);
+  }
+
+  // Find the userId argument (the first non-flag argument that is not the targetDate value)
+  const userIdArg = args.find(a => !a.startsWith('--') && a !== targetDate);
   const userId = userIdArg || 'testuser';
   let currentSimulatedTime: Date | null = null;
 
@@ -83,8 +116,8 @@ async function main() {
     fs.mkdirSync(logsDir, { recursive: true });
   }
 
-  const todayStr = getEasternISOString().split('T')[0].replace(/-/g, '');
-  const logFilePath = path.join(logsDir, `backtest_${userId}_${todayStr}.log`);
+  const dateStrForLog = targetDate ? targetDate.replace(/-/g, '') : getEasternISOString().split('T')[0].replace(/-/g, '');
+  const logFilePath = path.join(logsDir, `backtest_${userId}_${dateStrForLog}.log`);
   fs.writeFileSync(logFilePath, ''); // Overwrite log file on startup
 
   /**
@@ -93,6 +126,7 @@ async function main() {
    * prefix when processing candles.
    * 
    * @param message - The message string to log.
+   * @returns void
    */
   const log = (message: string) => {
     const timestamp = currentSimulatedTime ? getEasternISOString(currentSimulatedTime) : getEasternISOString();
@@ -244,9 +278,9 @@ async function main() {
     // FMP returns newest to oldest. Reverse to oldest to newest.
     const sortedChart = [...chart].reverse();
 
-    // Resolve the trading day from the latest candle in the chart to prevent issues past midnight or on weekends
+    // Resolve the trading day: use the custom targetDate if provided, or default to the latest candle in the chart
     const lastChartCandle = sortedChart[sortedChart.length - 1];
-    const todayPrefix = lastChartCandle ? lastChartCandle.date.split(' ')[0] : '';
+    const todayPrefix = targetDate || (lastChartCandle ? lastChartCandle.date.split(' ')[0] : '');
 
     const todayCandles = sortedChart.filter((c: any) => {
       return c.date && c.date.startsWith(todayPrefix);
